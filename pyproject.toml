@@ -1,0 +1,33 @@
+[project]
+name = "mission-control"
+version = "0.1.0"
+description = "Native Rerun ground station for the Heron surface vehicle"
+readme = "README.md"
+authors = [
+    { name = "Sebastian M" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "rerun-sdk==0.38.1",
+    "mcap>=1.5,<2",
+    "pymavlink>=2.4.50",
+    "pillow>=12.3.0",
+    "platformdirs>=4.12.3,<5",
+    "requests>=2.34.2",
+    "hidapi>=0.15.0,<0.16",
+]
+
+[project.optional-dependencies]
+analysis = ["marimo>=0.23,<1", "polars>=1.9,<2", "altair>=5.4,<7"]
+
+[project.scripts]
+mission-control = "backend.launch:main"
+mission-recorder = "backend.logger.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "backend"
+module-root = ""

@@ -1,0 +1,54 @@
+[package]
+name = "mission-control-viewer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+
+[[bin]]
+name = "mission-control-viewer"
+path = "main.rs"
+
+[dependencies]
+rerun = { version = "=0.38.1", default-features = false, features = ["native_viewer", "sdk", "server", "log_setup", "map_view"] }
+re_view_map = "=0.38.1"
+serde_json = "1"
+ureq = { version = "3", features = ["json"] }
+rfd = "=0.17.2"
+walkers = "=0.58.0"
+re_viewer_context = "=0.38.1"
+re_sdk_types = "=0.38.1"
+re_view = "=0.38.1"
+re_query = "=0.38.1"
+re_ui = "=0.38.1"
+
+[profile.dev]
+# The unoptimized Rerun dependency graph exceeds Apple's 16 MiB compact-unwind
+# offset range. Light optimization and fewer codegen units reduce the actual
+# code/unwind tables while retaining panic unwinding and normal linker checks.
+opt-level = 1
+codegen-units = 16
+debug = 0
+
+# The viewer and spatial view contribute large unwind tables. Stronger
+# optimization and one codegen unit keep the linked macOS table below 16 MiB.
+[profile.dev.package.re_viewer]
+opt-level = 2
+codegen-units = 1
+
+[profile.dev.package.re_view_spatial]
+opt-level = 2
+codegen-units = 1
+
+[profile.dev.package.mission-control-viewer]
+opt-level = 2
+codegen-units = 1
+
+# GPU lock tracing captures a backtrace for routine buffer/encoder operations
+# in debug builds. Use production-style GPU internals for interactive rendering;
+# runtime WebGPU validation remains controlled by the renderer's instance flags.
+[profile.dev.package.wgpu-core]
+opt-level = 2
+debug-assertions = false
+
+[patch.crates-io]
+re_view_map = { path = "vendor/re_view_map" }
