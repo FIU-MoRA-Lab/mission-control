@@ -21,6 +21,12 @@ pub(super) fn accent_button(
 impl MissionControl {
     /// Live telemetry belongs to the window chrome, outside the workspace tabs.
     pub(crate) fn telemetry_strip(&self, ui: &mut egui::Ui) {
+        let replay = self.recording_busy
+            || self.viewer.recording_db().is_some_and(|db| {
+                db.application_id().to_string() != "mission-control-live"
+                    || self.state["live_recording_id"].as_str()
+                        != Some(db.recording_id().to_string().as_str())
+            });
         let live = self.ready && self.flag("connected");
         let value = |name: &str, precision: usize, unit: &str| {
             if live {
@@ -33,6 +39,52 @@ impl MissionControl {
             .unwrap_or_else(|| "—".into())
         };
         ui.horizontal_wrapped(|ui| {
+            egui::Frame::new()
+                .fill(if replay {
+                    egui::Color32::from_rgb(45, 76, 112)
+                } else {
+                    egui::Color32::from_rgb(180, 38, 48)
+                })
+                .corner_radius(4)
+                .inner_margin(egui::Margin::symmetric(8, 3))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 5.0;
+                        if replay {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(14.0, 8.0), egui::Sense::hover());
+                            for offset in [0.0, 7.0] {
+                                let left = rect.left() + offset;
+                                ui.painter().add(egui::Shape::convex_polygon(
+                                    vec![
+                                        egui::pos2(left, rect.top()),
+                                        egui::pos2(left + 6.0, rect.center().y),
+                                        egui::pos2(left, rect.bottom()),
+                                    ],
+                                    egui::Color32::WHITE,
+                                    egui::Stroke::NONE,
+                                ));
+                            }
+                        } else {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                            ui.painter()
+                                .circle_filled(rect.center(), 3.0, egui::Color32::WHITE);
+                        }
+                        ui.label(
+                            egui::RichText::new(if replay { "REPLAY" } else { "LIVE" })
+                                .small()
+                                .strong()
+                                .color(egui::Color32::WHITE),
+                        );
+                    });
+                })
+                .response
+                .on_hover_text(if replay {
+                    "Viewing a recording. The vehicle readings alongside remain live."
+                } else {
+                    "Viewing the live recording."
+                });
             ui.small("LIVE VEHICLE");
             ui.separator();
             ui.label("Speed");
