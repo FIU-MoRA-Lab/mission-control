@@ -6,8 +6,7 @@ Custom Rust/egui panels provide vehicle controls and an offline mission editor.
 Python owns MAVLink, mission execution, gamepad input, and the 20 Hz control loop.
 
 The controller is **copied into this repository** under
-`backend/controller/` and the supporting backend modules. Mission Control
-does not import, launch, or modify the sibling Heron checkout.
+`backend/controller/`.
 
 ## Installation
 
