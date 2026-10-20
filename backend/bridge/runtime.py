@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import sys
+import os
 import threading
 import time
 import rerun as rr
+import numpy as np
+from backend.camera import CameraFeed, placeholder
 from backend.controller.runtime import ControllerRuntime
 from backend.bridge.validation import file_path, number
 from backend.recordings.mcap_reader import load_recording
@@ -42,6 +45,7 @@ class MissionBackend(ControllerRuntime):
         self._replay_plots = None
         self._viewer_catalogs = {}
         self._telemetry_closed = False
+        self.camera = CameraFeed(self._camera_frame, self._camera_status)
         self._recording = None
         self._recording_path = None
         self._telemetry_worker = threading.Thread(target=self._log_loop, name="rerun-telemetry", daemon=True)
@@ -71,6 +75,26 @@ class MissionBackend(ControllerRuntime):
         else:
             super().start()
         self._telemetry_worker.start()
+        self._camera_status("Camera off")
+        if not self.demo and os.environ.get("MISSION_CONTROL_CAMERA_ENABLED", "1") != "0":
+            self.camera.configure(enabled=True)
+
+    def _camera_frame(self, contents, received_ns):
+        # Camera times describe receipt on the GCS, never onboard acquisition.
+        with self._telemetry_lock:
+            if self._telemetry_closed:
+                return
+            stream = self.telemetry.stream
+            stream.reset_time()
+            stream.set_time("mission", duration=max(0, time.monotonic() - self._started_at))
+            stream.set_time("receive_time", timestamp=np.datetime64(received_ns, "ns"))
+            stream.log("camera/image", rr.EncodedImage(contents=contents, media_type="image/jpeg"))
+
+    def _camera_status(self, message):
+        self._camera_frame(placeholder(message), time.time_ns())
+        with self._telemetry_lock:
+            if not self._telemetry_closed:
+                self.telemetry.stream.log("events/camera", rr.TextLog(message))
 
     def _log_loop(self):
         while not self._stop.wait(.1):
@@ -90,9 +114,11 @@ class MissionBackend(ControllerRuntime):
                 self._cached_catalog = field_catalog(topics, types=self._field_types) + diagnostic_catalog()
                 self._catalog_signature = signature
             catalog = self._cached_catalog
-        return super().state(refresh_ui=refresh_ui) | {"demo": self.demo, "live_recording": str(self.live_recording), "live_recording_id": self.telemetry.stream.disk.get_recording_id(), "recording_active": str(self.telemetry.stream.active_path), "session_directory": str(self.live_recording.parent), "sensor_topics": topics, "field_catalog": catalog, "chart_presets": chart_presets(catalog)}
+        return super().state(refresh_ui=refresh_ui) | {"demo": self.demo, "camera": self.camera.state(), "live_recording": str(self.live_recording), "live_recording_id": self.telemetry.stream.disk.get_recording_id(), "recording_active": str(self.telemetry.stream.active_path), "session_directory": str(self.live_recording.parent), "sensor_topics": topics, "field_catalog": catalog, "chart_presets": chart_presets(catalog)}
 
     def command(self, action, data):
+        if action == "configure_camera":
+            return self.camera.configure(enabled=data.get("enabled"), source=data.get("source"))
         if action == "recording_catalog":
             info = viewer_catalog(data)
             with self._replay_lock:
@@ -209,6 +235,7 @@ class MissionBackend(ControllerRuntime):
         return super().command(action, data)
 
     def close(self):
+        self.camera.close()
         self._stop.set()
         if self._telemetry_worker.is_alive():
             self._telemetry_worker.join(timeout=2)

@@ -51,6 +51,7 @@ class PlotShutdownTests(unittest.TestCase):
         backend._telemetry_worker = Mock()
         backend._telemetry_worker.is_alive.return_value = False
         backend.telemetry = Mock()
+        backend.camera = Mock()
         return backend
 
     def test_disconnect_during_close_releases_stream_and_close_is_idempotent(self):

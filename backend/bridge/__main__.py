@@ -1,6 +1,7 @@
 """Managed Python process started by frontend/bridge/worker.rs."""
 import argparse
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -26,6 +27,13 @@ def main():
     sys.stdout = sys.stderr
     cache = Path(os.environ.get("MISSION_CONTROL_CACHE_DIR", user_cache_path("mission-control")))
     controller = VehicleController(args.connection)
+    # Keep request tracebacks with this session; the native UI only has the
+    # HTTP error string and cannot reconstruct why a request failed.
+    diagnostic_log = Path(controller.recorder.output_path).with_suffix(".backend.log")
+    logging.basicConfig(level=logging.WARNING)
+    handler = logging.FileHandler(diagnostic_log)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger("backend").addHandler(handler)
     if args.mission_file and not controller.load_waypoints_file(args.mission_file):
         raise ValueError("Could not load initial mission")
     backend = MissionBackend(controller, RasterTiles(args.fiu_root, cache), args.rerun_url,
@@ -47,7 +55,8 @@ def main():
         backend.start()
         print(json.dumps({"port": server.server_port, "token": token, "basemap": backend.basemap,
                           "demo": args.demo, "data_directory": str(data_directory()),
-                          "log_directory": str(log_directory())}), file=protocol, flush=True)
+                          "log_directory": str(log_directory()),
+                          "diagnostic_log": str(diagnostic_log)}), file=protocol, flush=True)
         display_stop = threading.Event()
         os.set_blocking(protocol.fileno(), False)
         def joystick_display():

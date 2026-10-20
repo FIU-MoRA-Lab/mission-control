@@ -33,6 +33,9 @@ class VehicleController:
         # Telemetry State
         self.is_armed = False
         self._confirmed_armed = False
+        self._confirmed_mode = None
+        self._mission_current_seq = None
+        self._mission_current_at = 0.0
         self.mode_str = "DISCONNECTED"
         self.lat = 0.0
         self.lon = 0.0
@@ -316,17 +319,41 @@ class VehicleController:
                 self.set_status_msg("[SIM] Starting simulated waypoint mission.", error=False)
                 self.start_simulated_mission(wps)
                 return
+            # Start the uploaded plan at its speed command, regardless of the
+            # autopilot's previous mission/resume index. Item zero is home.
+            sys_id = self.master.target_system or 1
+            comp_id = self.autopilot_component or self.master.target_component or 1
+            selected_at = time.monotonic()
+            self.transport.send("mission_set_current", sys_id, comp_id, 1)
             if not self.set_mode("AUTO"):
                 self.set_status_msg("[MAVLink] Mission is uploaded, but AUTO mode could not be selected.", error=True)
                 return
             if not self.set_arm(True):
                 self.set_status_msg("[MAVLink] AUTO selected, but vehicle could not be armed.", error=True)
                 return
-            self.current_wp_seq = 1
+            if not self._wait_for_mission_start(selected_at):
+                self.set_status_msg(
+                    "[MAVLink] Mission start unconfirmed: waiting for vehicle AUTO, armed state, "
+                    "and active waypoint telemetry. Check vehicle warnings and GPS/EKF status.", error=True)
+                return
             self.mission_started = True
-            self.set_status_msg("[MAVLink] Mission started: AUTO mode selected and vehicle armed.", error=False)
+            self.set_status_msg("[MAVLink] Mission started: vehicle confirmed AUTO, armed, and an active waypoint.", error=False)
+        except Exception as exc:
+            self.set_status_msg(f"[MAVLink] Mission start failed: {exc}", error=True)
         finally:
             self.is_starting_mission = False
+
+    def _wait_for_mission_start(self, selected_at, timeout=8.0):
+        deadline = time.monotonic() + timeout
+        while self.running and self.check_vehicle_link():
+            if (self._confirmed_mode == "AUTO" and self._confirmed_armed
+                    and self._mission_current_at >= selected_at
+                    and self._mission_current_seq is not None and self._mission_current_seq >= 2):
+                return True
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+        return False
 
     def _upload_mission_worker(self):
         self.is_uploading_mission = True

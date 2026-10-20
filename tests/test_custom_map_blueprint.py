@@ -9,7 +9,7 @@ from backend.rerun.schema import field_catalog
 class CustomMapBlueprintTests(unittest.TestCase):
     def map_view(self, flag, **kwargs):
         with patch.dict(os.environ, {"MISSION_CONTROL_CUSTOM_MAP": flag}):
-            return blueprint(**kwargs).root_container.contents[0]
+            return blueprint(**kwargs).root_container.contents[0].contents[0]
 
     def test_prototype_is_opt_in_and_avoids_existing_map_state(self):
         normal = self.map_view("0")

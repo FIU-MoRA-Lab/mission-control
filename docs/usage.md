@@ -195,8 +195,16 @@ coordinates. The last estimated position is retained until another
   changing it invalidates an earlier upload. Start uploads the route with a
   MAVLink `DO_CHANGE_SPEED` command before the first waypoint. The speed is
   saved in route GeoJSON and also controls offline simulation movement.
-  Actual ground speed remains visible in the vehicle header. Start uploads
-  the route automatically. Lake padding and
+  Actual ground speed remains visible in the vehicle header. This speed setting
+  applies to AUTO missions; joystick driving still uses the full manual input range.
+  Start uploads the route automatically, selects the beginning of the plan, and
+  waits for vehicle telemetry confirming AUTO, arming, and an active waypoint.
+  If confirmation does not arrive within eight seconds, the app reports an
+  unconfirmed start; commands may already have reached the vehicle, so inspect
+  its current state before retrying. Vehicle STATUSTEXT warnings (including
+  failsafe and EKF messages) appear in activity and the status bar.
+  The live connection sends a GCS heartbeat every second, including during AUTO
+  and while joystick input is disabled. Lake padding and
   fountain exclusion outlines use the copied Heron geometry logic. Changing
   padding resumes following live data so the map displays the updated boundary,
   even if the timeline was paused or showing an earlier time.
@@ -312,3 +320,40 @@ output root; `MISSION_CONTROL_LOG_DIR` overrides the log root for all formats
 also get their own folders beneath this root. No separate `recordings/` or
 `blueprints/` folder is generated. Basemap cache files use the OS cache directory
 for `mission-control`; `MISSION_CONTROL_CACHE_DIR` overrides the cache location.
+## Live camera
+
+The top viewport row is split equally between the map and camera. Drag the
+divider to resize either view. Camera frames are included in the live session's
+RRD for timeline playback; they are not added to MCAP or JSONL telemetry files.
+
+The Mac needs `ffmpeg` on its PATH. For the BlueOS USB webcam, run this from a
+separate terminal and keep it open while using the camera:
+
+```sh
+sh scripts/camera-stream.sh
+# Optional alternate SSH destination:
+sh scripts/camera-stream.sh pi@192.168.2.2
+```
+
+This uses the existing BlueOS container and its GStreamer tools to expose
+640×480 H.264 video at 10 fps on TCP port 5601. SSH prompts for your password;
+credentials are not stored. Ctrl-C stops the stream. Start it again after
+rebooting the Pi. If another camera service is already using `/dev/video0`,
+use that service's stream URL instead.
+
+Mission Control connects to `tcp://192.168.2.2:5601` automatically outside demo
+mode. The **Camera** controls let you edit the stream URL, connect/reconnect,
+or disconnect independently of the vehicle. RTSP and HTTP video URLs are also
+supported. A lost signal replaces the latest image with an offline message and
+retries automatically. Live camera controls always refer to the current camera;
+the camera viewport follows the selected recording and timeline.
+
+Set `MISSION_CONTROL_CAMERA_URL` to override the initial source, or set
+`MISSION_CONTROL_CAMERA_ENABLED=0` to disable automatic connection. Demo mode
+starts with the camera off; **Connect** can still enable it explicitly.
+Camera frames use GCS receipt time, not an onboard acquisition timestamp, and
+the source clock is not assumed synchronized to vehicle telemetry.
+
+On macOS, allow the app under **System Settings → Privacy & Security → Local
+Network**. If Terminal connects but the app reports “No route to host,” check
+this permission. Hover the camera status for decoder connection details.

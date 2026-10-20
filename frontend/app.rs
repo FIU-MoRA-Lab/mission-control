@@ -17,6 +17,7 @@ pub(crate) struct MissionControl {
     pub(crate) state: Value,
     pub(crate) ready: bool,
     pub(crate) error: String,
+    pub(crate) state_error: Option<String>,
     pub(crate) notice: String,
     pub(crate) manual: bool,
     pub(crate) tab: u8,
@@ -33,6 +34,7 @@ pub(crate) struct MissionControl {
     pub(crate) live_preset: String,
     pub(crate) replay_preset: String,
     pub(crate) layer_search: String,
+    pub(crate) camera_source: String,
     pub(crate) live_fields: std::collections::BTreeSet<String>,
     live_fields_initialized: bool,
     pub(crate) replay_fields: std::collections::BTreeSet<String>,
@@ -61,6 +63,7 @@ impl MissionControl {
             state: Value::Null,
             ready: false,
             error: "Starting Python controller…".into(),
+            state_error: None,
             notice: String::new(),
             manual: false,
             tab: if opening_recording { 2 } else { 0 },
@@ -77,6 +80,7 @@ impl MissionControl {
             live_preset: "controls".into(),
             replay_preset: "fields".into(),
             layer_search: String::new(),
+            camera_source: String::new(),
             live_fields: Default::default(),
             live_fields_initialized: false,
             replay_fields: Default::default(),
@@ -180,6 +184,13 @@ impl eframe::App for MissionControl {
                     self.error.clear();
                 }
                 Event::State(value) => {
+                    self.state_error = None;
+                    if self.camera_source.is_empty() {
+                        self.camera_source = value["camera"]["source"]
+                            .as_str()
+                            .unwrap_or("tcp://192.168.2.2:5601")
+                            .to_owned();
+                    }
                     if !self.live_fields_initialized {
                         if let Some(presets) = value["chart_presets"].as_array() {
                             self.live_fields = presets
@@ -217,6 +228,9 @@ impl eframe::App for MissionControl {
                 }
                 Event::Error(error) => {
                     self.error = error;
+                }
+                Event::StateError(error) => {
+                    self.state_error = Some(error);
                 }
                 Event::RecordingError(error) => {
                     self.error = error;

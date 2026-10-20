@@ -1,4 +1,5 @@
 //! Custom egui UI embedded beside the Rerun viewport.
+mod camera;
 mod layout;
 pub(crate) mod map_controls;
 mod plots;

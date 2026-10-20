@@ -107,6 +107,21 @@ class ControllerBridgeTests(unittest.TestCase):
                     self.assertEqual(json.load(response), {'error': str(failure)})
             self.assertEqual(self.request()['waypoints'], [])
 
+    def test_unexpected_request_errors_return_details_and_polling_recovers(self):
+        for method, path, data in [("state", "/state", None),
+                                   ("command", "/command", {"action": "start"})]:
+            with patch.object(self.backend, method, side_effect=AttributeError("missing mission state")), \
+                 self.assertLogs("backend.bridge.http_server", level="ERROR"):
+                request = Request(self.root + path,
+                                  data=json.dumps(data).encode() if data is not None else None,
+                                  headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"})
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(request, timeout=3)
+                with error.exception as response:
+                    self.assertEqual(response.code, 500)
+                    self.assertIn("AttributeError: missing mission state", json.load(response)["error"])
+            self.assertEqual(self.request()["waypoints"], [])
+
     def test_malformed_commands_do_not_mutate_state(self):
         for fields in [{'lat': math.nan, 'lon': 0}, {'lat': 90, 'lon': 0},
                        {'lat': 25, 'lon': True}, {'lat': '25', 'lon': -80}]:

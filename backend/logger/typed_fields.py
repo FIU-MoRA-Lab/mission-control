@@ -25,7 +25,9 @@ def log_decoded_fields(stream, topic, message_type, data, *, schemas=None):
             if length and protocol_type != "char":
                 arrow_type = pa.list_(arrow_type, length)
         if arrow_type is None and isinstance(value, int) and not isinstance(value, bool):
-            arrow_type = pa.uint64() if value >= 0 else pa.int64()
+            # Zero/positive samples must use the same type as later negative
+            # joystick values. Preserve uint64 only when int64 cannot hold it.
+            arrow_type = pa.int64() if value <= 2**63 - 1 else pa.uint64()
         state = "null" if value is None else "nan" if isinstance(value, float) and math.isnan(value) else "+inf" if value == float("inf") else "-inf" if value == -float("inf") else "present"
         # An explicit state preserves null even for a custom field whose type is
         # unknown on its first sample. Consumers must honor state, not forward-fill.

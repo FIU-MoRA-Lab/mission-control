@@ -88,6 +88,7 @@ class VehicleTelemetry:
                             }
                             if controller.vehicle_type == 0 or controller.mode_str.startswith("Mode("):
                                 controller.mode_str = rover_modes.get(msg.custom_mode, controller.mode_str)
+                        controller._confirmed_mode = controller.mode_str
 
                     elif msg_type in ('GLOBAL_POSITION_INT', 'GPS_RAW_INT', 'GPS2_RAW'):
                         # Header and live map share the autopilot's estimated position.
@@ -123,7 +124,17 @@ class VehicleTelemetry:
                             controller.battery_pct = msg.battery_remaining
 
                     elif msg_type == 'MISSION_CURRENT':
-                        controller.current_wp_seq = max(0, getattr(msg, 'seq', 0) - controller._mission_waypoint_offset)
+                        controller._mission_current_seq = getattr(msg, 'seq', 0)
+                        controller._mission_current_at = time.monotonic()
+                        controller.current_wp_seq = max(0, controller._mission_current_seq - controller._mission_waypoint_offset)
+
+                    elif msg_type == 'STATUSTEXT':
+                        text = msg.text
+                        if isinstance(text, bytes):
+                            text = text.decode("utf-8", errors="replace")
+                        text = text.rstrip("\x00")
+                        if text:
+                            controller.set_status_msg(f"[Vehicle] {text}", error=msg.severity <= 4)
 
                     elif msg_type in ('MISSION_REQUEST', 'MISSION_REQUEST_INT', 'MISSION_ACK'):
                         controller._mission_req_queue.put(msg)

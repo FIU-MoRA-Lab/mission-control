@@ -63,6 +63,10 @@ pub(crate) fn run_backend(
                 .build()
                 .into(),
         };
+        let diagnostic_log = ready["diagnostic_log"]
+            .as_str()
+            .unwrap_or("the session backend log")
+            .to_owned();
         let _ = events.send(Event::Ready(ready));
         // One executor preserves checkbox order without delaying manual-input polling.
         let (layouts_tx, layouts_rx) = mpsc::channel::<Value>();
@@ -93,6 +97,11 @@ pub(crate) fn run_backend(
         let mut last_poll = Instant::now() - Duration::from_secs(1);
         let mut ui_expired = false;
         loop {
+            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                return Err(format!(
+                    "Python backend exited ({status}). Check the terminal and {diagnostic_log}"
+                ));
+            }
             match requests.try_recv() {
                 Ok(Request::Command(action, mut data)) => {
                     if action == "configure_plots" {
@@ -220,7 +229,7 @@ pub(crate) fn run_backend(
                         }
                     }
                     Err(e) => {
-                        let _ = events.send(Event::Error(format!("Vehicle bridge: {e}")));
+                        let _ = events.send(Event::StateError(format!("Vehicle bridge: {e}")));
                     }
                 }
                 last_poll = Instant::now();

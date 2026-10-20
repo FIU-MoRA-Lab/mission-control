@@ -290,11 +290,10 @@ class ControllerRuntime:
             self.gamepad.running = False
         self.controller.running = False
         self.controller.simulating_mission = False
-        if self.controller.master:
-            try:
-                self.controller.transport.close()
-            except Exception as exc:
-                self.controller.log(f"[MAVLink] Transport close failed: {exc}")
+        try:
+            self.controller.transport.close()
+        except Exception as exc:
+            self.controller.log(f"[MAVLink] Transport close failed: {exc}")
         if self.controller.thread.is_alive():
             self.controller.thread.join(timeout=4.5)
         if self.worker.is_alive():

@@ -15,6 +15,26 @@ from mcap.reader import make_reader
 
 
 class TypedRecordingTests(unittest.TestCase):
+    def test_joystick_direction_changes_keep_one_signed_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = RrdLogger(Path(tmp) / "joystick")
+            writer.open()
+            for value in (0, 1000, -1000, 0):
+                writer.write(input_record(dict(requested_throttle=value, requested_yaw=-value)))
+            writer.close()
+            samples = {name: [] for name in ("requested_throttle", "requested_yaw")}
+            for chunk in RrdReader(writer.output_path).stream():
+                name = chunk.entity_path.rsplit("/", 1)[-1]
+                if chunk.entity_path != "/input/JOYSTICK/" + name or name not in samples:
+                    continue
+                batch = chunk.to_record_batch()
+                if "value" in batch.schema.names:
+                    column = batch.column("value")
+                    self.assertEqual(column.type.value_type, pa.int64())
+                    samples[name].extend(row[0] for row in column.to_pylist())
+            self.assertEqual(samples["requested_throttle"], [0, 1000, -1000, 0])
+            self.assertEqual(samples["requested_yaw"], [0, -1000, 1000, 0])
+
     def test_custom_values_survive_rrd_and_json_formats(self):
         data = dict(text="Battery low", enabled=False, missing=None, nan=float("nan"),
                     positive=float("inf"), negative=-float("inf"), empty=[],

@@ -55,13 +55,17 @@ def blueprint(*, catalog=None, visible_fields=None, preset="fields"):
     else:
         map_view = stable(rrb.MapView(origin="/geo", contents=map_contents,
                                      name="FIU · offline satellite", zoom=19), "map")
-    activity = stable(rrb.TextLogView(origin="/events", contents=["/events/status", "/events/messages", "/events/state_changes/**"], name="Activity & state changes"), "activity")
+    camera_view = stable(rrb.Spatial2DView(origin="/camera", contents=["/camera/image"],
+                                          name="Camera", background=[18, 24, 32]), "camera")
+    map_and_camera = rrb.Horizontal(map_view, camera_view, column_shares=[1, 1])
+    map_and_camera.id = uuid.uuid5(uuid.NAMESPACE_URL, "mission-control/map-and-camera")
+    activity = stable(rrb.TextLogView(origin="/events", contents=["/events/status", "/events/messages", "/events/camera", "/events/state_changes/**"], name="Activity & state changes"), "activity")
     boolean_paths = [field["path"] for field in enabled if field.get("data_type") in {"bool", "state"}]
     if boolean_paths and preset != "state_changes":
         views.append(stable(rrb.StateTimelineView(origin="/", contents=boolean_paths, name="Boolean & categorical states"), "booleans"))
     # Presets group related signals; other selected fields retain individual charts.
     charts = [rrb.Horizontal(*views[i:i+3]) for i in range(0, len(views), 3)]
-    parts = [map_view, *charts, activity]
+    parts = [map_and_camera, *charts, activity]
     shares = [4, *([2] * len(charts)), 1.5 if preset in {"activity", "states"} else .7]
     if preset == "state_changes":
         parts.insert(1, stable(rrb.StateTimelineView(origin="/", contents=["/state_changes/**", *boolean_paths], name="State changes"), "state-timeline"))

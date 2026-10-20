@@ -84,6 +84,7 @@ pub(crate) enum Event {
     ViewerCatalog(Value),
     ViewerCatalogError((String, String), String),
     State(Value),
+    StateError(String),
     Error(String),
     RecordingError(String),
     Unavailable(String),

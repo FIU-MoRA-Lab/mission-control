@@ -1,6 +1,7 @@
 """Authenticated loopback HTTP server: state, commands, imagery, and shutdown."""
 import hmac
 import json
+import logging
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -51,6 +52,9 @@ def make_server(backend, token):
                     self.send(404, {"error": "Not found"})
             except (ValueError, OSError) as exc:
                 self.send(400 if isinstance(exc, ValueError) else 503, {"error": str(exc)})
+            except Exception as exc:
+                logging.getLogger(__name__).exception("Backend GET request failed")
+                self.send(500, {"error": f"Backend request failed: {type(exc).__name__}: {exc}"})
 
         def do_POST(self):
             if not self.authorized(""):
@@ -80,6 +84,9 @@ def make_server(backend, token):
                 self.send(503, {"error": str(exc)})
             except (ValueError, TypeError, OSError) as exc:
                 self.send(400, {"error": str(exc)})
+            except Exception as exc:
+                logging.getLogger(__name__).exception("Backend command request failed")
+                self.send(500, {"error": f"Backend request failed: {type(exc).__name__}: {exc}"})
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True

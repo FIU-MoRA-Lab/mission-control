@@ -43,8 +43,15 @@ impl MissionControl {
                 });
             } else if !self.error.is_empty() {
                 ui.colored_label(egui::Color32::LIGHT_RED, &self.error);
+            } else if let Some(error) = &self.state_error {
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
             } else {
-                ui.label(self.state["status"].as_str().unwrap_or("Ready"));
+                let status = self.state["status"].as_str().unwrap_or("Ready");
+                if self.flag("status_error") {
+                    ui.colored_label(egui::Color32::LIGHT_RED, status);
+                } else {
+                    ui.label(status);
+                }
             }
         });
         egui::Panel::right("mission-control-panel")
@@ -52,6 +59,8 @@ impl MissionControl {
             .min_size(320.0)
             .show(ui, |ui| {
                 self.vehicle_controls(ui);
+                ui.separator();
+                self.camera_controls(ui);
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.tab, 0, "Vehicle");
