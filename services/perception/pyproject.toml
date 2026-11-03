@@ -1,0 +1,9 @@
+[project]
+name = "mission-control-perception"
+version = "0.1.0"
+description = "Isolated experiments for ground-station USV perception"
+requires-python = ">=3.13,<3.14"
+dependencies = ["ultralytics>=8.3,<9", "pyyaml>=6,<7", "pillow>=12,<13"]
+
+[tool.uv]
+package = false

@@ -10,7 +10,7 @@ from rerun.chunk import RrdReader
 from mcap.writer import Writer
 from backend.logger.session_recorder import SessionRecorder
 from backend.rerun.diagnostics import RecordDiagnostics, chart_fields, control_values, diagnostic_catalog
-from backend.rerun.presets import PRESETS, preset_fields
+from backend.rerun.presets import PRESETS, preset_fields, raw
 from backend.rerun.schema import field_catalog
 from backend.rerun.blueprint import blueprint
 from backend.rerun.replay import export_mcap
@@ -49,6 +49,35 @@ def lane_values(path, entity):
 
 
 class ChartPresetTests(unittest.TestCase):
+    def test_thruster_feedback_groups_received_feedback_by_units(self):
+        schema = field_catalog({
+            "/mavlink/ESC_STATUS": {"rpm[0]", "current[0]", "voltage[0]"},
+            "/mavlink/ESC_TELEMETRY_1_TO_4": {"rpm[0]", "current[0]", "voltage[0]"},
+            "/commands/ESC_TELEMETRY_1_TO_4": {"rpm[0]"},
+            "/mavlink/RPM": {"rpm1", "rpm2"},
+            "/mavlink/BATTERY_STATUS": {"current_battery", "voltages[0]"},
+            "/mavlink/SERVO_OUTPUT_RAW": {"servo1_raw", "servo3_raw"},
+        }, telemetry=[])
+        selected = preset_fields(schema, "thruster_feedback")
+        self.assertNotIn(raw("ESC_TELEMETRY_1_TO_4", "rpm[0]", True), selected)
+        layout = blueprint(catalog=schema, visible_fields=selected, preset="thruster_feedback")
+        views = [view for row in layout.root_container.contents[1:-1] for view in row.contents]
+        groups = {str(view.name): view.contents for view in views}
+        self.assertIn(raw("ESC_STATUS", "rpm[0]"), groups["Motor feedback · RPM"])
+        self.assertIn(raw("ESC_TELEMETRY_1_TO_4", "rpm[0]"), groups["Motor feedback · RPM"])
+        self.assertIn("/mavlink/RPM/rpm1", groups["Motor feedback · RPM"])
+        self.assertEqual(groups["ESC current · A"], [raw("ESC_STATUS", "current[0]")])
+        self.assertEqual(groups["ESC current · cA (100 = 1 A)"], [raw("ESC_TELEMETRY_1_TO_4", "current[0]")])
+        self.assertIn(raw("BATTERY_STATUS", "voltages[0]"), groups["Battery supply voltage · mV"])
+
+    def test_thruster_feedback_without_esc_data_keeps_available_commands(self):
+        schema = field_catalog({"/mavlink/SERVO_OUTPUT_RAW": {"servo1_raw", "servo3_raw"}}, telemetry=[])
+        selected = preset_fields(schema, "thruster_feedback")
+        layout = blueprint(catalog=schema, visible_fields=selected, preset="thruster_feedback")
+        views = layout.root_container.contents[1].contents
+        self.assertEqual(len(views), 1)
+        self.assertEqual(str(views[0].name), "Thruster commands · PWM µs")
+
     def test_state_changes_preset_uses_native_categorical_view(self):
         layout = blueprint(catalog=[], visible_fields=[], preset="state_changes")
         view = layout.root_container.contents[1]

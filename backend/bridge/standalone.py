@@ -13,6 +13,7 @@ from backend.controller.vehicle_control import VehicleController
 from backend.mapping.tiles import RasterTiles
 from backend.mavlink.network import ensure_gcs_ip, mavlink_connection_string
 from backend.bridge.http_server import make_server
+from backend.sdk.discovery import publish_endpoint
 
 def confirm_terminal_quit(armed):
     if not armed:
@@ -80,7 +81,8 @@ def main():
                       "source": str(ROOT / "backend")}),
           file=protocol_stdout, flush=True)
     try:
-        server.serve_forever(poll_interval=0.1)
+        with publish_endpoint(server.server_port, token):
+            server.serve_forever(poll_interval=0.1)
     finally:
         server.server_close()
         backend.close()

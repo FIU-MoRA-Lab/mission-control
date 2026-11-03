@@ -1,5 +1,6 @@
 """Bounded video decoding on a worker independent of vehicle input and telemetry."""
 from io import BytesIO
+from collections import deque
 import os
 import logging
 import shutil
@@ -56,21 +57,26 @@ class CameraFeed:
         self._enabled = False
         self._message = "Camera off"
         self._last_frame = None
+        self._frame_times = deque(maxlen=120)
         self._error = ""
 
     def state(self):
         with self._lock:
             age = None if self._last_frame is None else time.monotonic() - self._last_frame
             connected = self._enabled and age is not None and age < 2
+            times = self._frame_times
+            fps = ((len(times) - 1) / (times[-1] - times[0])
+                   if connected and len(times) > 1 and times[-1] > times[0] else 0)
             return dict(source=self.source, enabled=self._enabled, connected=connected,
                         status="Live" if connected else self._message if age is None else "Camera signal lost · reconnecting",
-                        error=self._error, frame_age=age, width=WIDTH, height=HEIGHT, fps=10)
+                        error=self._error, frame_age=age, width=WIDTH, height=HEIGHT, fps=round(fps, 1))
 
     def _status(self, message):
         with self._lock:
             changed = self._message != message
             self._message = message
             self._last_frame = None
+            self._frame_times.clear()
         if changed:
             self.on_status(message)
 
@@ -104,8 +110,8 @@ class CameraFeed:
             if self.source.startswith("rtsp://"):
                 args += ["-rtsp_transport", "tcp"]
             args += ["-i", self.source, "-an", "-sn", "-dn", "-vf",
-                     "fps=10,scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2",
-                     "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]
+                     "scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2",
+                     "-fps_mode", "passthrough", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1"]
             process = None
             errors = tempfile.TemporaryFile()
             try:
@@ -123,6 +129,9 @@ class CameraFeed:
                     self.on_frame(jpeg(Image.frombytes("RGB", (WIDTH, HEIGHT), frame)), received_ns)
                     with self._lock:
                         self._last_frame = time.monotonic()
+                        self._frame_times.append(self._last_frame)
+                        while self._frame_times[0] < self._last_frame - 2:
+                            self._frame_times.popleft()
                         self._message = "Live"
                         self._error = ""
             except (OSError, RuntimeError, ValueError) as exc:
@@ -165,6 +174,7 @@ class CameraFeed:
         with self._lock:
             self._enabled = False
             self._last_frame = None
+            self._frame_times.clear()
             process = self._process
         if process:
             self._terminate(process)

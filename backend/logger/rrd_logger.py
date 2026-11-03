@@ -1,7 +1,6 @@
 """Headless RRD writer; recording never requires a viewer, map or controller."""
 from pathlib import Path
 from datetime import timedelta
-import logging
 import rerun as rr
 import pyarrow as pa
 import numpy as np
@@ -59,7 +58,6 @@ class RrdLogger:
         self.stream = None
         self.started_ns = None
         self.closed = False
-        self.compaction_error = None
         self.diagnostics = RecordDiagnostics()
 
     def open(self):
@@ -91,10 +89,3 @@ class RrdLogger:
             self.flush()
             self.stream.disconnect()
             publish_file(self.active_path, self.output_path)
-            try:
-                from .compact import compact_rrd
-                compact_rrd(self.output_path)
-            except Exception as exc:
-                self.compaction_error = str(exc)
-                logging.getLogger(__name__).warning(
-                    "RRD compaction failed; original preserved at %s: %s", self.output_path, exc)

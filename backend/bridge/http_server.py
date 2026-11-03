@@ -42,6 +42,8 @@ def make_server(backend, token):
             try:
                 if url.path == "/state":
                     self.send(200, backend.state())
+                elif url.path == "/sdk/state":
+                    self.send(200, backend.state(refresh_ui=False))
                 elif tile:
                     parts = url.path.split("/")
                     if len(parts) != 6 or not parts[5].endswith(".png"):

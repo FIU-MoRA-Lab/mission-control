@@ -26,8 +26,8 @@ from backend.rerun.viewer_catalog import viewer_catalog
 
 
 class MissionBackend(ControllerRuntime):
-    def __init__(self, controller, tiles, url, *, demo=False, cache=None):
-        super().__init__(controller, tiles)
+    def __init__(self, controller, tiles, url, *, demo=False, cache=None, inputs=True):
+        super().__init__(controller, tiles, inputs=inputs)
         self.demo = demo
         self.rerun_url = url
         self.basemap = tiles.metadata()
@@ -114,9 +114,25 @@ class MissionBackend(ControllerRuntime):
                 self._cached_catalog = field_catalog(topics, types=self._field_types) + diagnostic_catalog()
                 self._catalog_signature = signature
             catalog = self._cached_catalog
-        return super().state(refresh_ui=refresh_ui) | {"demo": self.demo, "camera": self.camera.state(), "live_recording": str(self.live_recording), "live_recording_id": self.telemetry.stream.disk.get_recording_id(), "recording_active": str(self.telemetry.stream.active_path), "session_directory": str(self.live_recording.parent), "sensor_topics": topics, "field_catalog": catalog, "chart_presets": chart_presets(catalog)}
+        return super().state(refresh_ui=refresh_ui) | {"viewer_attached": self.rerun_url is not None, "demo": self.demo, "camera": self.camera.state(), "live_recording": str(self.live_recording), "live_recording_id": self.telemetry.stream.disk.get_recording_id(), "recording_active": str(self.telemetry.stream.active_path), "session_directory": str(self.live_recording.parent), "sensor_topics": topics, "field_catalog": catalog, "chart_presets": chart_presets(catalog)}
 
     def command(self, action, data):
+        if action == "attach_viewer":
+            from urllib.parse import urlparse
+            url = data.get("url", "")
+            parsed = urlparse(url)
+            if parsed.scheme != "rerun+http" or parsed.hostname != "127.0.0.1" or not parsed.port:
+                raise ValueError("The viewer must use a loopback Rerun receiver")
+            with self._telemetry_lock:
+                self.telemetry.stream.attach(url)
+                self.rerun_url = url
+                self.telemetry = RerunTelemetry(self.telemetry.stream, self.basemap)
+            return {"basemap": self.basemap, "demo": self.demo}
+        if action == "detach_viewer":
+            with self._telemetry_lock:
+                self.telemetry.stream.detach()
+                self.rerun_url = None
+            return {"ok": True}
         if action == "configure_camera":
             return self.camera.configure(enabled=data.get("enabled"), source=data.get("source"))
         if action == "recording_catalog":
@@ -165,11 +181,14 @@ class MissionBackend(ControllerRuntime):
             return {"ok": True}
         if action == "mode":
             mode = data.get("mode")
+            if getattr(self,"testing_without_gps",False) and mode == "AUTO":
+                raise ValueError("AUTO mode is disabled in no-GPS motor test mode")
             if mode not in {"MANUAL", "HOLD", "AUTO"}:
                 raise ValueError("Unsupported mode")
             with self._commands:
                 if self._closing:
                     raise ValueError("Ground station is shutting down")
+                self.programmatic.takeover("Operator mode change")
                 self._manual_active = False
                 self.session.manual.zero()
                 if not self.controller.set_mode(mode):

@@ -1,0 +1,5 @@
+data/
+runs/
+*.pt
+*.mlpackage/
+.ultralytics/

@@ -15,3 +15,8 @@ frontend/target/
 logs/
 /recordings/
 blueprints/
+/runs/
+/.mission-control/
+/routes.json
+
+/batches/

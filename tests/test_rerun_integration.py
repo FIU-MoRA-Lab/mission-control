@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from mcap.writer import Writer
 
 from backend.bridge.runtime import MissionBackend
 from backend.controller.runtime import ControllerRuntime
@@ -22,6 +23,28 @@ from backend.rerun.replay import export_mcap
 ROOT = Path(__file__).resolve().parents[1]
 
 class RerunIntegrationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._fixture_directory = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._fixture_directory.cleanup)
+        cls.demo_recording = Path(cls._fixture_directory.name) / 'demo.mcap'
+        with cls.demo_recording.open('wb') as handle:
+            writer = Writer(handle)
+            writer.start()
+            writer.add_metadata('fixture', {'synthetic': 'true'})
+            position = writer.register_channel('/mavlink/GLOBAL_POSITION_INT', 'json', 0)
+            sensor = writer.register_channel('/sensors/water', 'json', 0)
+            cls.demo_message_count = 0
+            for second in range(3):
+                stamp = (1_700_000_000 + second) * 1_000_000_000
+                for channel, data in (
+                    (position, {'lat': 257581000 + second * 100, 'lon': -803739000 + second * 100, 'alt': 1000}),
+                    (sensor, {'temperature': 22.0 + second, 'conductivity': 400 + second * 10}),
+                ):
+                    writer.add_message(channel, stamp, json.dumps({'data': data}).encode(), stamp)
+                    cls.demo_message_count += 1
+            writer.finish()
+
     def test_live_catalog_is_reused_and_invalidated_when_fields_arrive(self):
         from backend.rerun.schema import field_catalog
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'MISSION_CONTROL_DATA_DIR': tmp}), patch('backend.mavlink.transport.SessionRecorder'):
@@ -66,7 +89,7 @@ class RerunIntegrationTests(unittest.TestCase):
                     self.assertTrue(0<=x<=basemap['width'])
                     self.assertTrue(0<=y<=basemap['height'])
                 output=Path(tmp)/'replay.rrd'
-                result=export_mcap(ROOT/'assets/demo.mcap',output,basemap,geometry.lake_geojson())
+                result=export_mcap(self.demo_recording,output,basemap,geometry.lake_geojson())
             self.assertTrue(result['synthetic'])
             self.assertGreater(result['streams'],0)
             self.assertGreater(output.stat().st_size,1000)
@@ -88,14 +111,14 @@ class RerunIntegrationTests(unittest.TestCase):
                 backend.command('manual',{})
                 with self.assertRaises(ValueError):
                     backend.command('manual_axes',{'throttle':1000,'yaw':300})
-                with patch('backend.bridge.runtime.export_mcap',return_value={'filename':'test'}):
-                    backend.command('load_mcap',{'path':str(ROOT/'assets/demo.mcap')})
+                with patch('backend.bridge.runtime.export_mcap', wraps=export_mcap):
+                    backend.command('load_mcap',{'path':str(self.demo_recording)})
                 dataset = backend._recording['datasets'][0]
                 field = dataset['fields'][0]
                 selection = {'topic':dataset['topic'], 'field':field['name'],
                              'minimum':field['min'], 'maximum':field['max'],
                              'radius':4, 'opacity':.5, 'track_visible':False}
-                with patch('backend.bridge.runtime.export_mcap',return_value={}) as export:
+                with patch('backend.bridge.runtime.export_mcap', wraps=export_mcap) as export:
                     filtered = backend.command('filter_readings',selection)
                     self.assertGreater(filtered['matched'],0)
                     self.assertFalse(export.call_args.kwargs['include_raw'])
@@ -144,8 +167,8 @@ class RerunIntegrationTests(unittest.TestCase):
                     except Exception as exc:
                         self.fail(f"{exc}\n{diagnostics.read_text()}")
                 self.assertTrue(request('/state')['demo'])
-                replay = request('/command', {'action':'load_mcap','path':str(ROOT/'assets/demo.mcap')})
-                self.assertEqual(replay['messageCount'],17166)
+                replay = request('/command', {'action':'load_mcap','path':str(self.demo_recording)})
+                self.assertEqual(replay['messageCount'], self.demo_message_count)
                 self.assertGreater(len(replay['datasets']),0)
                 dataset = replay['datasets'][0]
                 field = dataset['fields'][0]

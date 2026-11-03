@@ -54,16 +54,15 @@ class RrdCompactionTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual(list(Path(tmp).iterdir()), [path])
 
-    def test_close_publishes_original_when_optimizer_fails(self):
+    def test_close_publishes_readable_recording_without_compaction(self):
         with tempfile.TemporaryDirectory() as tmp:
             writer = RrdLogger(Path(tmp) / "test.rrd")
             writer.open()
             writer.stream.log("sample", rr.Scalars(42))
-            with patch("backend.logger.compact.compact_rrd", side_effect=RuntimeError("disk full")):
-                with self.assertLogs("backend.logger.rrd_logger", level="WARNING"):
-                    writer.close()
-            writer.close()
-            self.assertEqual(writer.compaction_error, "disk full")
+            with patch("backend.logger.compact.compact_rrd") as compact:
+                writer.close()
+                writer.close()
+                compact.assert_not_called()
             self.assertTrue(writer.output_path.exists())
             self.assertFalse(writer.active_path.exists())
             self.assertGreater(fingerprint(writer.output_path)[1], 0)

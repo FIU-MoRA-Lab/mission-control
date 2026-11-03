@@ -221,6 +221,21 @@ impl MissionControl {
         {
             ui.colored_label(AMBER, error);
         }
+        let calibrating = self.joystick["calibration"]["pending"].as_bool() == Some(true);
+        if ui
+            .add_enabled(
+                connected && !calibrating,
+                egui::Button::new("Recalibrate sticks"),
+            )
+            .clicked()
+        {
+            self.pause();
+            self.command("calibrate_joystick", json!({}));
+        }
+        if let Some(status) = self.joystick["calibration"]["status"].as_str() {
+            ui.small(status);
+        }
+        ui.small("Release both sticks to calibrate. Enable joystick again when finished.");
         ui.horizontal(|ui| {
             for (stick, label) in [("left", "Left · throttle"), ("right", "Right · steering")] {
                 ui.vertical(|ui| {
@@ -249,6 +264,15 @@ impl MissionControl {
                     if connected {
                         let x = self.joystick[format!("{stick}_x")].as_f64().unwrap_or(0.0) as f32;
                         let y = self.joystick[format!("{stick}_y")].as_f64().unwrap_or(0.0) as f32;
+                        let raw_point = center
+                            + egui::vec2(
+                                x * (1.0 - y * y / 2.0).sqrt(),
+                                -y * (1.0 - x * x / 2.0).sqrt(),
+                            ) * radius;
+                        painter.circle_stroke(raw_point, 4.0, stroke);
+                        let corrected = &self.joystick["calibration"]["corrected"];
+                        let x = corrected[format!("{stick}_x")].as_f64().unwrap_or(x as f64) as f32;
+                        let y = corrected[format!("{stick}_y")].as_f64().unwrap_or(y as f64) as f32;
                         // Square HID ranges map into the circle without clipping diagonal positions.
                         let point = center
                             + egui::vec2(
@@ -261,6 +285,7 @@ impl MissionControl {
                 });
             }
         });
+        ui.small("Green: filtered input · outline: raw stick position");
         ui.horizontal(|ui| {
             let throttle = self.state["manual"]["throttle"].as_f64().unwrap_or(0.0) / 10.0;
             let steering = self.state["manual"]["yaw"].as_f64().unwrap_or(0.0) / 10.0;

@@ -75,7 +75,7 @@ class RerunTelemetry:
             log_boolean(self.stream, f"/diagnostics/local/{name}", name, bool(value), self.boolean_states)
         snapshots = {
             "commands/input": dict(source=state["manual"]["source"], active=state["manual"]["active"],
-                                   requested_throttle=state["manual"]["throttle"], requested_yaw=state["manual"]["yaw"]),
+                                   requested_throttle=float(state["manual"]["throttle"]), requested_yaw=float(state["manual"]["yaw"])),
             "vehicle/status": dict(mode=state["mode"], armed=state["armed"],
                                    connected=state["connected"], simulation=state["simulating"]),
         }

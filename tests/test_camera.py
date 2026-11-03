@@ -74,10 +74,20 @@ class CameraTests(unittest.TestCase):
                 self.assertIn("receive_time", timelines)
                 self.assertNotIn("vehicle_time", timelines)
 
+    def test_reported_frame_rate_uses_received_frames_and_resets_on_disconnect(self):
+        feed = CameraFeed(lambda *_: None, lambda *_: None)
+        with patch("backend.camera.time.monotonic", return_value=102):
+            feed._enabled = True
+            feed._last_frame = 102
+            feed._frame_times.extend(101 + frame / 30 for frame in range(31))
+            self.assertEqual(feed.state()["fps"], 30)
+            feed._status("Camera unavailable · retrying")
+            self.assertEqual(feed.state()["fps"], 0)
+
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for stream integration")
     def test_network_frames_reconnect_and_stop_without_vehicle(self):
         sample = subprocess.run([
-            shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=320x240:r=10",
+            shutil.which("ffmpeg"), "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=320x240:r=30",
             "-t", "1", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
             "-f", "matroska", "pipe:1"], capture_output=True, check=True, timeout=10).stdout
         frames, messages = [], []
@@ -103,7 +113,7 @@ class CameraTests(unittest.TestCase):
 
             def on_frame(contents, stamp):
                 frames.append((contents, stamp))
-                if len(frames) >= 20:
+                if len(frames) >= 60:
                     received.set()
 
             feed = CameraFeed(on_frame, messages.append, source=source)

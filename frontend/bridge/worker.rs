@@ -1,4 +1,4 @@
-//! Own the Python child process, and poll vehicle state.
+//! Poll vehicle state, optionally owning the Python child process.
 use super::http::Api;
 use super::{Event, LiveJoystick, Request, UiLease};
 use serde_json::{Value, json};
@@ -18,50 +18,88 @@ pub(crate) fn run_backend(
     args: Vec<String>,
 ) {
     let result = (|| -> Result<(), String> {
-        let python = std::env::var("MISSION_CONTROL_PYTHON").unwrap_or("python3".into());
-        let root = std::env::var("MISSION_CONTROL_ROOT").unwrap_or_else(|_| "..".into());
-        let mut child = Command::new(python)
-            .args(["-m", "backend.bridge", "--rerun-url", &url])
-            .args(args)
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| format!("Python backend: {e}"))?;
-        let mut reader =
-            BufReader::new(child.stdout.take().ok_or("Backend stdout is unavailable")?);
-        let mut line = String::new();
-        reader.read_line(&mut line).map_err(|e| e.to_string())?;
-        let ready: Value =
-            serde_json::from_str(&line).map_err(|e| format!("Backend did not start: {e}"))?;
-        // This reader runs independently of HTTP commands, telemetry polling and Rerun.
-        std::thread::spawn(move || {
-            for line in reader.lines() {
-                let Ok(line) = line else {
-                    break;
-                };
-                let Ok(packet) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                if packet["event"] == "joystick" && packet["data"].is_object() {
-                    live_joystick.publish(packet["data"].clone());
-                }
+        let attached = std::env::var("MISSION_CONTROL_ATTACH").ok();
+        let mut child = None;
+        let (api, ready) = if let Some(path) = &attached {
+            let descriptor: Value = serde_json::from_slice(
+                &std::fs::read(path).map_err(|e| format!("Backend descriptor: {e}"))?,
+            )
+            .map_err(|e| e.to_string())?;
+            let root = descriptor["url"].as_str().ok_or("Missing backend URL")?;
+            let address: std::net::SocketAddr = root
+                .strip_prefix("http://")
+                .ok_or("Expected local HTTP backend")?
+                .parse()
+                .map_err(|_| "Invalid backend address")?;
+            if !address.ip().is_loopback() {
+                return Err("Only loopback backend attachment is supported".into());
             }
-            live_joystick
-                .publish(json!({"connected":false,"error":"Joystick display feed disconnected"}));
-        });
-        let api = Api {
-            root: format!("http://127.0.0.1:{}", ready["port"]),
-            token: ready["token"]
-                .as_str()
-                .ok_or("Missing backend token")?
-                .into(),
-            agent: ureq::Agent::config_builder()
-                .http_status_as_error(false)
-                .timeout_global(Some(Duration::from_secs(2)))
-                .build()
-                .into(),
+            let api = make_api(
+                root.to_owned(),
+                descriptor["token"]
+                    .as_str()
+                    .ok_or("Missing token")?
+                    .to_owned(),
+            );
+            let mut ready = api.call(
+                "/command",
+                Some(json!({"action":"attach_viewer", "url":url})),
+            )?;
+            ready["port"] = json!(address.port());
+            ready["token"] = descriptor["token"].clone();
+            (api, ready)
+        } else {
+            let ready = {
+                let python = std::env::var("MISSION_CONTROL_PYTHON").unwrap_or("python3".into());
+                let root = std::env::var("MISSION_CONTROL_ROOT").unwrap_or_else(|_| "..".into());
+                let mut process = Command::new(python)
+                    .args(["-m", "backend.bridge", "--rerun-url", &url])
+                    .args(args)
+                    .current_dir(root)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::inherit())
+                    .spawn()
+                    .map_err(|e| format!("Python backend: {e}"))?;
+                let mut reader = BufReader::new(
+                    process
+                        .stdout
+                        .take()
+                        .ok_or("Backend stdout is unavailable")?,
+                );
+                let mut line = String::new();
+                reader.read_line(&mut line).map_err(|e| e.to_string())?;
+                let ready: Value = serde_json::from_str(&line)
+                    .map_err(|e| format!("Backend did not start: {e}"))?;
+                // This reader runs independently of HTTP commands, telemetry polling and Rerun.
+                let display = live_joystick.clone();
+                std::thread::spawn(move || {
+                    for line in reader.lines() {
+                        let Ok(line) = line else {
+                            break;
+                        };
+                        let Ok(packet) = serde_json::from_str::<Value>(&line) else {
+                            continue;
+                        };
+                        if packet["event"] == "joystick" && packet["data"].is_object() {
+                            display.publish(packet["data"].clone());
+                        }
+                    }
+                    display.publish(
+                        json!({"connected":false,"error":"Joystick display feed disconnected"}),
+                    );
+                });
+                child = Some(process);
+                ready
+            };
+            let api = make_api(
+                format!("http://127.0.0.1:{}", ready["port"]),
+                ready["token"]
+                    .as_str()
+                    .ok_or("Missing backend token")?
+                    .to_owned(),
+            );
+            (api, ready)
         };
         let diagnostic_log = ready["diagnostic_log"]
             .as_str()
@@ -96,8 +134,15 @@ pub(crate) fn run_backend(
         });
         let mut last_poll = Instant::now() - Duration::from_secs(1);
         let mut ui_expired = false;
+        let mut state_failures = 0;
         loop {
-            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            if let Some(status) = child
+                .as_mut()
+                .map(|process| process.try_wait())
+                .transpose()
+                .map_err(|e| e.to_string())?
+                .flatten()
+            {
                 return Err(format!(
                     "Python backend exited ({status}). Check the terminal and {diagnostic_log}"
                 ));
@@ -182,6 +227,9 @@ pub(crate) fn run_backend(
                         }
                     }
                 }
+                Ok(Request::PrepareQuit) if attached.is_some() => {
+                    let _ = events.send(Event::QuitCheck(false));
+                }
                 Ok(Request::PrepareQuit) => match api.call("/prepare-quit", Some(json!({}))) {
                     Ok(state) => {
                         let _ =
@@ -193,6 +241,7 @@ pub(crate) fn run_backend(
                         let _ = events.send(Event::QuitCheck(true));
                     }
                 },
+                Ok(Request::Shutdown(_)) if attached.is_some() => break,
                 Ok(Request::Shutdown(confirmed)) => {
                     match api.call("/shutdown", Some(json!({"confirmed_armed": confirmed}))) {
                         Ok(_) => {
@@ -224,11 +273,19 @@ pub(crate) fn run_backend(
             if last_poll.elapsed() >= Duration::from_millis(100) {
                 match api.call("/state", None) {
                     Ok(state) => {
+                        state_failures = 0;
+                        if attached.is_some() {
+                            live_joystick.publish(state["joystick"].clone());
+                        }
                         if events.send(Event::State(state)).is_err() {
                             break;
                         }
                     }
                     Err(e) => {
+                        state_failures += 1;
+                        if attached.is_some() && state_failures >= 3 {
+                            break;
+                        }
                         let _ = events.send(Event::StateError(format!("Vehicle bridge: {e}")));
                     }
                 }
@@ -236,6 +293,16 @@ pub(crate) fn run_backend(
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+        if attached.is_some() {
+            let _ = api.call(
+                "/command",
+                Some(json!({"action":"manual_active", "active":false})),
+            );
+            let _ = api.call("/command", Some(json!({"action":"detach_viewer"})));
+            let _ = events.send(Event::Closed);
+            return Ok(());
+        }
+        let mut child = child.ok_or("Missing owned backend process")?;
         drop(child.stdin.take()); // EOF triggers neutral output and MCAP flush, even after GUI failure.
         let _ = events.send(Event::Notice("Saving recording…".into()));
         // Closed RRDs are compacted and checked before the backend exits.
@@ -255,5 +322,17 @@ pub(crate) fn run_backend(
     })();
     if let Err(error) = result {
         let _ = events.send(Event::Unavailable(error));
+    }
+}
+
+fn make_api(root: String, token: String) -> Api {
+    Api {
+        root,
+        token,
+        agent: ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(2)))
+            .build()
+            .into(),
     }
 }

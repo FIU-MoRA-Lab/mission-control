@@ -11,6 +11,7 @@ from backend.controller.mission_session import MissionSession
 from backend.mapping.lake import LakeSafetyGeometry
 from backend.recordings.mcap_reader import load_recording
 from backend.bridge.validation import coordinates, number, file_path
+from backend.control.service import ControlService
 
 class ControllerRuntime:
     def __init__(self, controller, tiles, *, inputs=True):
@@ -37,6 +38,7 @@ class ControllerRuntime:
         self.streamer = ManualControlStreamer(self.session)
         self.worker = threading.Thread(target=self._input_loop, daemon=True)
         self.desktop_location = None
+        self.programmatic = ControlService(self)
 
     def start(self):
         self.controller.start()
@@ -64,6 +66,7 @@ class ControllerRuntime:
                 except queue.Empty:
                     pass
                 self.expire_inputs()
+                self.programmatic.tick()
 
     def _accept_gamepad_sample(self, throttle, yaw, source, positions=None, raw_axes=None, timestamp_ns=None, *, publish_live=True):
         """Consume only samples from the local HID reader, never UI axis commands."""
@@ -99,6 +102,8 @@ class ControllerRuntime:
         with self._live_joystick_lock:
             value = dict(self._live_joystick)
             value["connected"] = value["connected"] and time.monotonic() - self._live_joystick_at <= 0.4
+            if self.gamepad:
+                value["calibration"] = self.gamepad.calibration.snapshot()
             return value
 
     def _log_joystick_sample(self, source, raw_axes=None, timestamp_ns=None):
@@ -138,11 +143,12 @@ class ControllerRuntime:
             messages = c._log_queue[:]
             del c._log_queue[:len(messages)]
             self.logs = (self.logs + messages)[-100:]
-            locked = c.is_armed or c.mission_started
+            locked = c.is_armed or c.mission_started or self.programmatic.busy
             editing_locked = locked or c.is_uploading_mission or c.is_starting_mission
             first, last = (waypoints[0], waypoints[-1]) if waypoints else ({}, {})
-            return {
+            snapshot = {
                 "connected": c.connected, "armed": c.is_armed, "mode": c.mode_str,
+                "vehicle_confirmed": {"armed": c._confirmed_armed, "mode": c._confirmed_mode},
                 "lat": c.lat, "lon": c.lon, "alt": c.alt, "heading": c.heading,
                 "speed": c.groundspeed, "satellites": c.satellites, "fix": c.fix_type,
                 "mission_speed": c.mission_speed,
@@ -170,7 +176,9 @@ class ControllerRuntime:
                            "recording_error": c.recording_error or ("; ".join(c.recorder.errors[-3:]) if isinstance(c.recorder.errors, list) else ""), "receive_errors": c.receive_errors,
                            "manual_stream_alive": self.streamer.is_alive()},
                 "desktop_location": self.desktop_location,
+                "sdk": self.programmatic.state(),
             }
+            return self.programmatic.display_state(snapshot)
 
     def command(self, action, data):
         # File decoding must not block state polling or the manual-input lease.
@@ -180,8 +188,28 @@ class ControllerRuntime:
             if self._closing:
                 raise ValueError("Ground station is shutting down")
             c, s = self.controller, self.session
+            if action == "sdk":
+                try:
+                    return self.programmatic.command(data.get("operation"), data)
+                except (KeyError, TypeError) as exc:
+                    raise ValueError(f"Invalid SDK request: {exc}") from exc
+            if getattr(self,"testing_without_gps",False) and action in {"upload","start"}:
+                raise ValueError("Waypoint missions are disabled in no-GPS motor test mode")
+            if action in {"stop", "manual", "arm", "disarm", "upload", "start", "calibrate_joystick"} or (action == "manual_active" and data.get("active") is True):
+                self.programmatic.takeover("Operator command: " + action)
+            if self.programmatic.busy and action in {"clear", "close_loop", "add_waypoint", "move_waypoint", "remove_waypoint", "load", "padding", "mission_speed"}:
+                raise ValueError("Release SDK control before changing the route or operating area")
+            if (action == "manual" or action == "manual_active" and data.get("active") is True):
+                if self.gamepad and self.gamepad.calibration.snapshot()["pending"]:
+                    raise ValueError("Wait for joystick calibration to finish before enabling controls")
             if action == "manual_axes":
                 raise ValueError("Driving input is joystick-only; UI axis commands are disabled")
+            elif action == "calibrate_joystick":
+                if not self.gamepad or not self.joystick_state()["connected"]:
+                    raise ValueError("Connect a joystick before calibrating")
+                self._manual_active = False
+                s.manual.zero()
+                self.gamepad.calibration.request()
             elif action == "manual_active":
                 if not isinstance(data.get("active"), bool):
                     raise ValueError("active must be a boolean")
@@ -264,6 +292,7 @@ class ControllerRuntime:
                     return False
                 self.controller.running = False
             self._closing = True
+            self.programmatic.takeover("Backend shutting down")
             self._manual_active = False
             self.session.manual.zero()
             self.controller.simulating_mission = False
@@ -279,6 +308,12 @@ class ControllerRuntime:
 
     def _close_resources(self):
         self._stop.set()
+        with self._commands:
+            self.programmatic.end_recording("interrupted", "Backend shutting down")
+        for worker in self.programmatic.auto_workers:
+            worker.join(timeout=20)
+        for worker in self.programmatic.finalizers:
+            worker.join()
         self._manual_active = False
         self.session.manual.zero()
         # Neutral is sent before tearing down the MAVLink transport.

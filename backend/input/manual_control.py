@@ -12,7 +12,15 @@ class ManualControlState:
         self.yaw = 0
         self.input_source = "NO JOYSTICK"
         self.neutral_ticks = 0
+        self.suspended = False
         self._lock = threading.Lock()
+
+    def suspend(self, active):
+        """Allow one programmatic owner to replace the joystick output stream."""
+        with self._lock:
+            self.suspended = active
+            self.throttle = self.yaw = 0
+            self.neutral_ticks = 0
 
     @staticmethod
     def _clamp(value):
@@ -30,6 +38,8 @@ class ManualControlState:
             return
         with self._lock:
             throttle, yaw = self.throttle, self.yaw
+            if self.suspended:
+                return
             if throttle or yaw:
                 self.neutral_ticks = 5
             elif self.neutral_ticks > 0:

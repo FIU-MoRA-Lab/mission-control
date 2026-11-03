@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import queue
+from backend.input.calibration import StickCalibration
 
 try:
     import hid
@@ -21,6 +22,7 @@ class JoystickReader(threading.Thread):
         self.live_callback = live_callback
         self.running = True
         self.error = ""
+        self.calibration = StickCalibration()
 
     def _publish(self, axes):
         """Keep the latest axis state instead of queuing stale movements."""
@@ -58,8 +60,7 @@ class JoystickReader(threading.Thread):
 
     @staticmethod
     def normalize_axis(raw, invert=False):
-        """Normalize joystick axes for driving with gain and deadzone."""
-        # Preserve the existing driving calibration independently of display positions.
+        """Legacy uncalibrated conversion; live driving uses StickCalibration."""
         if raw < 0 or raw > 255:
             value = raw / (32768 if raw < 0 else 32767)
         else:
@@ -108,14 +109,18 @@ class JoystickReader(threading.Thread):
             while self.running:
                 # Read each report as it arrives instead of accumulating a 20 Hz backlog.
                 data = gamepad.read(64, 8)
+                self.calibration.expire()
                 if data and len(data) >= 4:
                     # Logitech Dual Action maps:
                     # data[0] = Left X, data[1] = Left Y
                     # data[2] = Right X, data[3] = Right Y
                     raw_axes = list(data[:4])
                     positions = self.decode_positions(data)
-                    axes["throttle"] = self.normalize_axis(data[1], invert=True)
-                    axes["yaw"] = self.normalize_axis(data[2], invert=False)
+                    corrected = self.calibration.update(positions)
+                    axes["throttle"] = int(max(-1.0, min(1.0, corrected["left_y"] * 1.1)) * 1000)
+                    axes["yaw"] = int(max(-1.0, min(1.0, corrected["right_x"] * 1.1)) * 1000)
+                if self.calibration.snapshot()["pending"]:
+                    axes = {"throttle": 0, "yaw": 0}
                 sample = (axes["throttle"], axes["yaw"], "GAMEPAD", positions.copy(), raw_axes.copy(), time.time_ns())
                 if data and self.live_callback:
                     self.live_callback(*sample)

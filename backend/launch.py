@@ -5,16 +5,27 @@ import subprocess
 import sys
 
 
-def main():
-    root = ROOT
+def launch_viewer(args=(), *, attach=None):
     env = os.environ.copy()
     env['MISSION_CONTROL_PYTHON'] = sys.executable
-    env['MISSION_CONTROL_ROOT'] = str(root)
+    env['MISSION_CONTROL_ROOT'] = str(ROOT)
+    if attach is not None:
+        env['MISSION_CONTROL_ATTACH'] = str(attach)
+    else:
+        env.pop('MISSION_CONTROL_ATTACH', None)
     binary = FRONTEND / 'target/release/mission-control-viewer'
-    command = [str(binary)] if binary.exists() and env.get("MISSION_CONTROL_CUSTOM_MAP") != "1" else [
-        'cargo', 'run', '--manifest-path', str(FRONTEND / 'Cargo.toml'), '--']
-    # The native app owns backend shutdown and armed-vehicle quit confirmation.
-    process = subprocess.Popen([*command, *sys.argv[1:]], env=env, start_new_session=os.name != "nt")
+    sources = [*FRONTEND.rglob('*.rs'), FRONTEND / 'Cargo.toml']
+    fresh = binary.exists() and all(path.stat().st_mtime <= binary.stat().st_mtime for path in sources if 'target' not in path.parts)
+    command = [str(binary)] if fresh and env.get("MISSION_CONTROL_CUSTOM_MAP") != "1" else [
+        'cargo', 'run', '--release', '--manifest-path', str(FRONTEND / 'Cargo.toml'), '--']
+    return subprocess.Popen([*command, *args], env=env, cwd=ROOT, start_new_session=os.name != "nt")
+
+
+def main():
+    if sys.argv[1:2] == ['run']:
+        from backend.batch import main as run_batch
+        raise SystemExit(run_batch(sys.argv[2:]))
+    process = launch_viewer(sys.argv[1:])
     try:
         raise SystemExit(process.wait())
     except KeyboardInterrupt:

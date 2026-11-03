@@ -15,8 +15,17 @@ class ViewerStream:
         self._closed = False
         self.diagnostics = RecordDiagnostics()
         if url:
-            self.viewer = rr.RecordingStream("mission-control-live", recording_id=self.disk.get_recording_id())
-            self.viewer.connect_grpc(url)
+            self.attach(url)
+
+    def attach(self, url):
+        self.detach()
+        self.viewer = rr.RecordingStream("mission-control-live", recording_id=self.disk.get_recording_id())
+        self.viewer.connect_grpc(url)
+
+    def detach(self):
+        if self.viewer:
+            self.viewer.disconnect()
+            self.viewer = None
 
     def record(self, record):
         if self._owns_writer:

@@ -41,7 +41,8 @@ impl MissionControl {
                     self.command("configure_camera", json!({"enabled":false}));
                 }
                 if connected {
-                    ui.small("640 × 480 · 10 fps");
+                    let fps = self.state["camera"]["fps"].as_f64().unwrap_or(0.0);
+                    ui.small(format!("640 × 480 · {fps:.0} fps"));
                 }
             });
         });

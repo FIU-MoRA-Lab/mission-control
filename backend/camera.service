@@ -1,0 +1,21 @@
+[Unit]
+Description=Mission Control USB camera encoder
+Requires=docker.service
+After=docker.service network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm --force mission-control-camera
+ExecStart=/usr/bin/python3 /usr/local/lib/mission-control/camera_service.py serve
+ExecStop=-/usr/bin/docker stop --time 3 mission-control-camera
+ExecStopPost=-/usr/bin/docker rm --force mission-control-camera
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mission-control-camera
+
+[Install]
+WantedBy=multi-user.target

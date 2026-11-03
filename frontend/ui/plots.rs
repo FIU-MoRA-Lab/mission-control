@@ -150,6 +150,8 @@ impl MissionControl {
         });
         if matches!(preset.as_str(), "controls" | "throttle" | "steering") {
             ui.small("Overlay scale: PWM µs. Requested and MANUAL_CONTROL inputs use 1500 + value × 0.5. Servo 1/3 are output commands, not measured thrust; left/right assignment is unverified. Raw fields remain available below.");
+        } else if preset == "thruster_feedback" {
+            ui.small("Reported RPM indicates motor rotation when feedback is available. Current indicates electrical load; voltage indicates supply power. Battery current includes other equipment. Servo 1/3 are commands, not measured motion or thrust. Feedback charts appear only for available telemetry; ESC/RPM channel mapping must be verified.");
         } else if preset == "state_changes" {
             ui.small("State lanes show ARMED/DISARMED, MANUAL/AUTO/HOLD and mission transitions. Vehicle lanes come from received messages; GCS lanes show local controller state. Unknown values create gaps. Older RRDs may lack state lanes.");
         } else if matches!(preset.as_str(), "states" | "activity") {

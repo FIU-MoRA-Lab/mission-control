@@ -25,13 +25,16 @@ recording they have `.part` suffixes. Completed names are published after close.
 `--duration 30` stops after a bounded capture. No heartbeat, mode, arm/disarm,
 manual-control command, network configuration, or message-rate request is sent.
 
-RRDs use one-second / 4 MiB disk batching independently of the viewer. After
-close, a temporary compacted copy replaces the published original only if it is
-smaller and all stored values, types, row identities and timelines match.
-Failures emit a warning and retain the original. Large files can take additional
-time to finalize. Explicit `flush()` still drains disk batches immediately;
-the recorder's periodic flush leaves Rerun's own disk timer in control.
-Existing files can use `uv run python -m backend.logger.compact recording.rrd`.
+RRDs use one-second / 4 MiB disk batching independently of the viewer. Close
+flushes and publishes the recording without running compaction. Explicit
+`flush()` still drains disk batches immediately; the recorder's periodic flush
+leaves Rerun's own disk timer in control.
+
+To compact a completed file, run
+`uv run python -m backend.logger.compact recording.rrd`. A temporary compacted
+copy replaces the original only if it is smaller and all stored values, types,
+row identities and timelines match. Optimization or verification failures leave
+the original unchanged and report an error.
 
 ## QGroundControl alongside the recorder
 

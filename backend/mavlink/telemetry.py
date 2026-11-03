@@ -64,8 +64,6 @@ class VehicleTelemetry:
                     if msg_type == 'HEARTBEAT':
                         if not controller.master.probably_vehicle_heartbeat(msg):
                             continue
-                        controller._last_vehicle_heartbeat = time.monotonic()
-                        controller.connected = True
                         component = msg.get_srcComponent()
                         if component == mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1:
                             if controller.autopilot_component not in (None, component):
@@ -78,6 +76,8 @@ class VehicleTelemetry:
                             controller.vehicle_type = getattr(msg, "type", controller.vehicle_type)
                         elif component != controller.autopilot_component:
                             continue
+                        controller._last_vehicle_heartbeat = time.monotonic()
+                        controller.connected = True
                         controller.is_armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
                         controller._confirmed_armed = controller.is_armed
                         controller.mode_str = mavutil.mode_string_v10(msg)
@@ -96,21 +96,30 @@ class VehicleTelemetry:
                         if msg_type == 'GLOBAL_POSITION_INT':
                             controller.lat = msg.lat / 1e7
                             controller.lon = msg.lon / 1e7
+                            controller._last_position_at = time.monotonic()
                         if hasattr(msg, 'alt'):
                             controller.alt = msg.alt / 1000.0
                         if hasattr(msg, 'hdg') and msg.hdg != 65535:
                             controller.heading = msg.hdg / 100.0
+                            controller._last_heading_at = time.monotonic()
                         controller.satellites = getattr(msg, 'satellites_visible', getattr(msg, 'satellites', controller.satellites))
                         controller.fix_type = getattr(msg, 'fix_type', controller.fix_type)
 
                     elif msg_type == 'ATTITUDE':
                         controller.yaw = msg.yaw
-                        if controller.heading == 0.0:
-                            controller.heading = math.degrees(msg.yaw) % 360.0
+                        controller._last_heading_at = time.monotonic()
+                        controller.heading = math.degrees(msg.yaw) % 360.0
 
                     elif msg_type == 'VFR_HUD':
                         controller.groundspeed = getattr(msg, 'groundspeed', 0.0)
                         controller.heading = getattr(msg, 'heading', controller.heading)
+                        controller._last_heading_at = time.monotonic()
+
+                    elif msg_type == 'PARAM_VALUE':
+                        key = msg.param_id
+                        if isinstance(key, bytes):
+                            key = key.decode('ascii', errors='replace')
+                        controller._control_parameters[key.rstrip('\x00')] = (float(msg.param_value), time.monotonic())
 
                     elif msg_type == 'BATTERY_STATUS':
                         if hasattr(msg, 'voltages') and len(msg.voltages) > 0 and msg.voltages[0] != 65535:

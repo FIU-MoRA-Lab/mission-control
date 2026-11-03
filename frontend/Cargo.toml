@@ -28,6 +28,8 @@ re_ui = "=0.38.1"
 opt-level = 1
 codegen-units = 16
 debug = 0
+# Keep development caches smaller at the cost of slower rebuilds after edits.
+incremental = false
 
 # The viewer and spatial view contribute large unwind tables. Stronger
 # optimization and one codegen unit keep the linked macOS table below 16 MiB.

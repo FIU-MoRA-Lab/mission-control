@@ -118,7 +118,14 @@ show several fields from different messages simultaneously. Search by field,
 unit, or message name.
 
 The **Chart preset** selector offers **Control chain**, **Throttle + servos**,
-**Steering + servos**, **Vehicle & mission state**, and **Activity & errors**.
+**Steering + servos**, **Thruster feedback**, **Vehicle & mission state**, and **Activity & errors**.
+**Thruster feedback** groups reported motor RPM, ESC current and supply voltage,
+battery current/voltage, and servo outputs 1/3. It includes observed `ESC_STATUS`,
+ArduPilot `ESC_TELEMETRY_*`, and `RPM` fields when present in live or recorded data.
+Different electrical units use separate charts. RPM is evidence of motor rotation;
+current indicates load, voltage indicates power, and servo outputs remain commands.
+Battery current includes other equipment, and motor/ESC channel assignments must
+be verified. Missing feedback is not inferred from commands.
 The separate **State changes** preset uses Rerun's `StateChange` archetype and
 native `StateTimelineView` for categorical lanes: DISARMED/ARMED, operating
 mode (including MANUAL/AUTO/HOLD), input state, and mission transitions.
@@ -246,7 +253,19 @@ disabled. **Stop vehicle** or Esc invokes Heron's emergency stop. Focus loss,
 native file dialogs, confirmation dialogs, replay loading, and input disable
 pause teleoperation.
 
-The UI shows each stick as a circle with crosshairs and a moving position dot.
+The Joystick panel automatically learns small resting offsets on all four axes
+after one second of stable reports near center (within 12% of the factory
+center). Each stick learns independently. A dead zone filters remaining noise;
+movement outside it scales smoothly to full travel. Automatic learning stays
+near center because a held stick cannot reliably be distinguished from drift.
+For larger offsets, select **Recalibrate sticks**, release both sticks, and hold
+them still for one second. Manual calibration accepts offsets up to 30% of
+travel and times out after ten seconds. It pauses driving; select **Enable
+joystick** again after calibration finishes. Calibration lasts for the current
+app session and is learned again on restart.
+
+The UI shows each stick as a circle with crosshairs, a green filtered input dot,
+and an outline showing the raw position.
 Both X/Y axes are captured for each stick, even while driving is paused. HID
 reports update a direct live feed; the circles read the newest sample independently
 of HTTP state polling, Rerun playback, and recording. The HID reader consumes
@@ -298,17 +317,17 @@ while messages are arriving. Existing recordings are left in their original
 locations; this layout applies to new sessions.
 
 RRD disk writes batch for up to one second or 4 MiB; viewer updates keep their
-own shorter batching interval. On close, the original RRD is published first,
-then Rerun compacts a temporary copy beside it. Every stored component and exact
-timeline value is checked before a smaller copy atomically replaces the original.
-Optimization or verification failures leave the original available and emit a
-warning. Finalization can take longer for large recordings; the viewer allows up
-to five minutes for backend cleanup. Derived status snapshots are logged only
-when they change, and track geometry uses overlapping blocks of up to 128 points
+own shorter batching interval. On close, the RRD is flushed and published without
+running compaction. The viewer allows up to five minutes for backend cleanup.
+Derived status snapshots are logged only when they change, and track geometry
+uses overlapping blocks of up to 128 points
 instead of repeatedly saving the entire route history. Acquired message samples
 are retained at their original rate.
 
-To compact an existing recording with the same verification and safe replacement:
+Compaction is an explicit operation on completed recordings. It checks every
+stored component and exact timeline value before a smaller temporary copy
+atomically replaces the original. Optimization or verification failures leave
+the original unchanged and report an error:
 
 ```sh
 uv run python -m backend.logger.compact /path/to/recording.rrd
@@ -326,27 +345,60 @@ The top viewport row is split equally between the map and camera. Drag the
 divider to resize either view. Camera frames are included in the live session's
 RRD for timeline playback; they are not added to MCAP or JSONL telemetry files.
 
-The Mac needs `ffmpeg` on its PATH. For the BlueOS USB webcam, run this from a
-separate terminal and keep it open while using the camera:
+The Mac needs `ffmpeg` on its PATH. The boat needs the onboard
+`mission-control-camera` systemd service. Install it once from your terminal:
 
 ```sh
-sh scripts/camera-stream.sh
-# Optional alternate SSH destination:
-sh scripts/camera-stream.sh pi@192.168.2.2
+uv run python -m backend.camera_service install
 ```
 
-This uses the existing BlueOS container and its GStreamer tools to expose
-640×480 H.264 video at 10 fps on TCP port 5601. SSH prompts for your password;
-credentials are not stored. Ctrl-C stops the stream. Start it again after
-rebooting the Pi. If another camera service is already using `/dev/video0`,
-use that service's stream URL instead.
+SSH prompts for the Pi's password if an accepted SSH key is not available.
+No credentials are stored. The installer uses passwordless `sudo`, as provided
+by the standard BlueOS Pi account; an SSH host alias with equivalent access can
+be supplied with `--host`. After installation there is no SSH connection to keep
+open. The service starts at boot, retries after encoder failures or an absent
+USB camera, and writes diagnostics to the system journal.
+
+The service runs GStreamer in its own container, reusing the installed
+`blueos-core` image for its tools. It converts the raw USB camera to 640×480
+H.264 at 30 fps (3 Mbit/s target bitrate) and serves Matroska over TCP port 5601. Only the selected camera
+device is passed into that container. Stopping the service stops and removes
+its container. This supports the raw-only webcam even on the boat's older
+BlueOS camera manager, which rejected a raw RTSP stream.
+
+```sh
+uv run python -m backend.camera_service status
+uv run python -m backend.camera_service logs
+uv run python -m backend.camera_service restart
+uv run python -m backend.camera_service stop
+# Optional installation settings (defaults shown):
+uv run python -m backend.camera_service install --host pi@192.168.2.2 --device /dev/video0 --container blueos-core --port 5601
+# Use another supported capture rate if needed:
+uv run python -m backend.camera_service install --fps 25
+```
+
+Configuration lives on the Pi at `/etc/mission-control/camera.json`; the unit is
+`/etc/systemd/system/mission-control-camera.service`. Re-running the installer
+updates configuration and restarts the service. A stable `/dev/v4l/by-id/...`
+camera path can be supplied with `--device`. Capture defaults to 30 fps; use a
+rate advertised by the camera. The app preserves incoming frame cadence and the
+existing camera label shows the measured receive rate. After upgrading from the
+10 fps service, re-run the installer and restart Mission Control to update both
+capture and decoding. To disable startup at boot, run
+`sudo systemctl disable --now mission-control-camera` on the Pi.
+
+Stop any old `camera-stream.sh` terminal before installation so it releases
+the camera and port. That temporary launcher has been removed. If another
+camera service already owns the device, stop that stream through its own
+manager before installing; this installer does not stop other camera services.
 
 Mission Control connects to `tcp://192.168.2.2:5601` automatically outside demo
-mode. The **Camera** controls let you edit the stream URL, connect/reconnect,
-or disconnect independently of the vehicle. RTSP and HTTP video URLs are also
-supported. A lost signal replaces the latest image with an offline message and
-retries automatically. Live camera controls always refer to the current camera;
-the camera viewport follows the selected recording and timeline.
+mode. The existing **Camera** controls connect/reconnect/disconnect independently
+of the vehicle and also accept RTSP and HTTP video URLs. A lost signal replaces
+the latest image with an offline message and retries automatically. Live camera
+controls refer to the current camera; the viewport follows the selected recording
+and timeline. Hover the camera status for decoder errors; use the service's
+`logs` command for onboard capture errors.
 
 Set `MISSION_CONTROL_CAMERA_URL` to override the initial source, or set
 `MISSION_CONTROL_CAMERA_ENABLED=0` to disable automatic connection. Demo mode

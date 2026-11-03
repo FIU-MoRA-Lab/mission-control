@@ -34,6 +34,9 @@ class VehicleController:
         self.is_armed = False
         self._confirmed_armed = False
         self._confirmed_mode = None
+        self._last_position_at = 0.0
+        self._last_heading_at = 0.0
+        self._control_parameters = {}
         self._mission_current_seq = None
         self._mission_current_at = 0.0
         self.mode_str = "DISCONNECTED"
@@ -144,8 +147,15 @@ class VehicleController:
         throttle = max(-1000, min(1000, int(throttle)))
         yaw = max(-1000, min(1000, int(yaw)))
         self.check_vehicle_link()
-        pwm_steer = int(1500 + yaw * 0.5)
-        pwm_throttle = int(1500 + throttle * 0.5)
+        roll_input, throttle_input = yaw, throttle
+        if self._control_parameters.get("PILOT_STEER_TYPE", (0,))[0] == 1:
+            # Keep the existing joystick's throttle/steering meaning when the
+            # vehicle is configured for native left/right paddle inputs.
+            left, right = throttle + yaw, throttle - yaw
+            scale = max(1.0, abs(left) / 1000, abs(right) / 1000)
+            roll_input, throttle_input = round(left / scale), round(right / scale)
+        pwm_steer = int(1500 + roll_input * 0.5)
+        pwm_throttle = int(1500 + throttle_input * 0.5)
         output = {"time": time.monotonic(), "throttle": throttle, "yaw": yaw,
                                  "chan1_raw": pwm_steer, "chan3_raw": pwm_throttle,
                                  "sent": False, "error": "Vehicle link unavailable"}
@@ -158,7 +168,7 @@ class VehicleController:
                         output["error"] = "Ground station is shutting down"
                         self.last_manual_send = output
                         return False
-                    self.transport.send("manual_control", sys_id, throttle, 0, 0, yaw, 0)
+                    self.transport.send("manual_control", sys_id, throttle_input, 0, 0, roll_input, 0)
                     # Use the same target component selected by the legacy TUI
                     # after its heartbeat. Some vehicle bridges do not route
                     # component-0 RC overrides to the autopilot.

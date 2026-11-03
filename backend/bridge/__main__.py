@@ -1,5 +1,6 @@
 """Managed Python process started by frontend/bridge/worker.rs."""
 import argparse
+from contextlib import ExitStack
 import json
 import logging
 import os
@@ -14,10 +15,14 @@ from backend.controller.vehicle_control import VehicleController
 from backend.mapping.tiles import RasterTiles
 from backend.bridge.http_server import make_server
 from backend.bridge.runtime import MissionBackend
+from backend.sdk.discovery import publish_endpoint
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rerun-url", required=True)
+    parser.add_argument("--rerun-url")
+    parser.add_argument("--no-gps-test",action="store_true",help="Motor testing only: no geographic checks or navigation")
+    parser.add_argument("--no-inputs", action="store_true")
+    parser.add_argument("--execution-mode", choices=("simulation", "live"))
     parser.add_argument("--connection", default="udpin:0.0.0.0:14550")
     parser.add_argument("--mission-file")
     parser.add_argument("--fiu-root", type=Path, default=ASSETS/"fiu-basemap")
@@ -37,7 +42,9 @@ def main():
     if args.mission_file and not controller.load_waypoints_file(args.mission_file):
         raise ValueError("Could not load initial mission")
     backend = MissionBackend(controller, RasterTiles(args.fiu_root, cache), args.rerun_url,
-                             demo=args.demo, cache=cache)
+                             demo=args.demo, cache=cache, inputs=not args.no_inputs)
+    backend.execution_mode = args.execution_mode
+    backend.testing_without_gps = args.no_gps_test
     token = secrets.token_urlsafe(32)
     server = make_server(backend, token)
     def parent_watch():
@@ -51,8 +58,10 @@ def main():
         threading.Thread(target=server.shutdown, daemon=True).start()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, shutdown_signal)
+    discovery = ExitStack()
     try:
         backend.start()
+        discovery.enter_context(publish_endpoint(server.server_port, token))
         print(json.dumps({"port": server.server_port, "token": token, "basemap": backend.basemap,
                           "demo": args.demo, "data_directory": str(data_directory()),
                           "log_directory": str(log_directory()),
@@ -75,6 +84,7 @@ def main():
         finally:
             display_stop.set()
     finally:
+        discovery.close()
         server.server_close()
         backend.close()
 

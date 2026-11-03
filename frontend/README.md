@@ -37,4 +37,15 @@ Rerun binary's unwind tables within Apple's compact-unwind offset limit. Panic
 unwinding and linker diagnostics remain enabled. Changing these settings
 requires a one-time dependency rebuild.
 
+Incremental compilation is disabled to reduce development cache storage. For
+regular use, build the release app and remove development artifacts:
+
+```sh
+cargo build --manifest-path frontend/Cargo.toml --release --locked
+cargo clean --manifest-path frontend/Cargo.toml --profile dev
+```
+
+The launcher uses the release binary when present. Rebuild it after Rust source
+changes. Development commands recreate `target/debug/` as needed.
+
 See [custom map prototype](../docs/custom-map-prototype.md) for the opt-in run commands and comparison criteria.

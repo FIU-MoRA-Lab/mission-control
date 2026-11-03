@@ -24,3 +24,18 @@ This repository runs from a checkout; it does not yet ship a standalone installe
 
 See the [usage guide](docs/usage.md) for running the app and logger, and the
 [development guide](docs/development.md) for code organization and verification.
+
+Programmatic control, path execution, map waypoint access, and scoped recordings
+are documented in [the Python SDK guide](docs/sdk.md). The SDK uses the existing
+backend and UI; simulation is the default and live control is explicit.
+
+Run a folder of Python experiments sequentially with one automatically managed
+backend and separate logs per run:
+
+```bash
+uv run mission-control run experiments/ --mode simulation
+uv run mission-control run experiments/ --mode simulation --ui
+```
+
+Each file exports `run(mc)` or an ordered `EXPERIMENTS` mapping. The existing UI is
+optional; the batch stops on failure and neutralizes controls between runs.
