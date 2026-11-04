@@ -19,6 +19,44 @@ from backend.mapping.tiles import RasterTiles
 
 
 class ControlVisibilityTests(unittest.TestCase):
+    def test_idle_sdk_tick_preserves_joystick_output_and_neutral_ticks(self):
+        with patch("backend.mavlink.transport.SessionRecorder"):
+            controller = VehicleController()
+        runtime = ControllerRuntime(controller, Mock(), inputs=False)
+        sender = mavutil.mavlink.MAVLink(io.BytesIO())
+        controller.master = SimpleNamespace(mav=sender, target_system=1, target_component=1)
+        controller.connected = True
+        controller.mode_str = "MANUAL"
+        runtime.command("manual_active", {"active": True})
+        # The input worker ticks the SDK after accepting each joystick sample.
+        runtime._accept_gamepad_sample(600, -200, "GAMEPAD")
+        for _ in range(3):
+            runtime.programmatic.tick()
+            runtime.session.manual.send_tick()
+        self.assertEqual(sender.total_packets_sent, 6)
+        self.assertEqual((controller.last_manual_send["throttle"],
+                          controller.last_manual_send["yaw"]), (600, -200))
+        runtime._accept_gamepad_sample(0, 0, "GAMEPAD")
+        for _ in range(5):
+            runtime.programmatic.tick()
+            runtime.session.manual.send_tick()
+        self.assertEqual(sender.total_packets_sent, 16)
+        runtime.programmatic.tick()
+        runtime.session.manual.send_tick()
+        self.assertEqual(sender.total_packets_sent, 16)
+
+    def test_sdk_ownership_transitions_clear_old_joystick_axes(self):
+        with patch("backend.mavlink.transport.SessionRecorder"):
+            controller = VehicleController()
+        runtime = ControllerRuntime(controller, Mock(), inputs=False)
+        manual = runtime.session.manual
+        manual.set_axes(600, -200, "GAMEPAD")
+        manual.suspend(True)
+        self.assertEqual((manual.throttle, manual.yaw, manual.neutral_ticks), (0, 0, 0))
+        manual.set_axes(300, 100, "GAMEPAD")
+        manual.suspend(False)
+        self.assertEqual((manual.throttle, manual.yaw, manual.neutral_ticks), (0, 0, 0))
+
     def test_control_pair_is_recorded_as_sent_with_expected_wire_fields(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"MISSION_CONTROL_DATA_DIR": tmp}, clear=True):
             controller = VehicleController()

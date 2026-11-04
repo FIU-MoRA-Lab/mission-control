@@ -97,6 +97,9 @@ class VehicleTelemetry:
                             controller.lat = msg.lat / 1e7
                             controller.lon = msg.lon / 1e7
                             controller._last_position_at = time.monotonic()
+                            if hasattr(msg, 'vx') and hasattr(msg, 'vy'):
+                                controller.groundspeed = math.hypot(msg.vx, msg.vy) / 100
+                                controller._last_speed_at = time.monotonic()
                         if hasattr(msg, 'alt'):
                             controller.alt = msg.alt / 1000.0
                         if hasattr(msg, 'hdg') and msg.hdg != 65535:
@@ -112,6 +115,7 @@ class VehicleTelemetry:
 
                     elif msg_type == 'VFR_HUD':
                         controller.groundspeed = getattr(msg, 'groundspeed', 0.0)
+                        controller._last_speed_at = time.monotonic()
                         controller.heading = getattr(msg, 'heading', controller.heading)
                         controller._last_heading_at = time.monotonic()
 

@@ -36,6 +36,7 @@ class VehicleController:
         self._confirmed_mode = None
         self._last_position_at = 0.0
         self._last_heading_at = 0.0
+        self._last_speed_at = 0.0
         self._control_parameters = {}
         self._mission_current_seq = None
         self._mission_current_at = 0.0

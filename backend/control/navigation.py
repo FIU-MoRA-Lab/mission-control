@@ -28,7 +28,12 @@ class RouteFollower:
             leg = plan.legs[self.leg]
             p, end = xy(position, leg.start), xy(leg.end, leg.start)
             progress, error = projection(p, (0,0), end)
-            if math.dist(p,end) > plan.arrival_radius_m:
+            distance = math.dist(p, end)
+            # Internal knots define the input profile: an arrival-radius shortcut
+            # would start the next ramp before the requested midpoint peak.
+            reached = (distance <= plan.arrival_radius_m if self.leg == len(plan.legs)-1
+                       else progress >= 1 or distance <= 0.01)
+            if not reached:
                 break
             if self.leg == len(plan.legs)-1:
                 return Guidance(self.leg, 1, error, 0, 0, 0, True)

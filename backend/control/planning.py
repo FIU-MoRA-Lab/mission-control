@@ -24,7 +24,9 @@ class Waypoint:
 
 
 @dataclass(frozen=True)
-class Linear:
+class LinearThrottleRamp:
+    """Change throttle from start to end in proportion to distance along a leg."""
+
     start: float
     end: float
 
@@ -36,18 +38,24 @@ class Linear:
         return self.start + (self.end - self.start) * max(0, min(1, fraction))
 
 
-def Constant(value):
-    return Linear(value, value)
+def ConstantThrottle(value):
+    """Maintain one normalized throttle input throughout a route leg."""
+    return LinearThrottleRamp(value, value)
+
+
+# Compatibility for existing scripts; new callers should use the explicit names.
+Linear = LinearThrottleRamp
+Constant = ConstantThrottle
 
 
 @dataclass(frozen=True)
 class Leg:
     start: Waypoint
     end: Waypoint
-    throttle: Linear
+    throttle: LinearThrottleRamp
 
     def __post_init__(self):
-        if not isinstance(self.start, Waypoint) or not isinstance(self.end, Waypoint) or not isinstance(self.throttle, Linear):
+        if not isinstance(self.start, Waypoint) or not isinstance(self.end, Waypoint) or not isinstance(self.throttle, LinearThrottleRamp):
             raise ValueError("A leg needs two Waypoints and a throttle profile")
         if self.start == self.end:
             raise ValueError("A leg must have different endpoints")
@@ -88,6 +96,6 @@ class Plan:
             raise ValueError("Unsupported plan version")
         return cls(
             legs=tuple(Leg(Waypoint.from_dict(leg["start"]), Waypoint.from_dict(leg["end"]),
-                           Linear(**leg["throttle"])) for leg in value["legs"]),
+                           LinearThrottleRamp(**leg["throttle"])) for leg in value["legs"]),
             **{key: value[key] for key in ("arrival_radius_m", "launch_throttle", "max_tracking_error_m", "max_duration_s") if key in value},
         )

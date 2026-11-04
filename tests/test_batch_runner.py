@@ -108,10 +108,10 @@ class BatchProcessTests(unittest.TestCase):
         return process,directory,json.loads((directory/'results.json').read_text())
 
     def test_one_backend_runs_files_sequentially_and_records_each_separately(self):
-        path_run = '''from backend.sdk import Waypoint, Plan, Leg, Constant
+        path_run = '''from backend.sdk import Waypoint, Plan, Leg, ConstantThrottle
 
 def run(mc):
-    plan = Plan([Leg(Waypoint(25.7581,-80.37365),Waypoint(25.758154,-80.37365),Constant(1))])
+    plan = Plan([Leg(Waypoint(25.7581,-80.37365),Waypoint(25.758154,-80.37365),ConstantThrottle(1))])
     execution = mc.run("path",plan)
     execution.wait_until_finished()
 '''
@@ -136,7 +136,7 @@ def run(mc):
             self.assertEqual(len(list((directory/'session').rglob('*.mcap'))),1)
             self.assertFalse((Path(tmp)/'data/logs').exists())
 
-    def test_smooth_profile_and_home_are_recorded_without_rrd_schema_errors(self):
+    def test_navigation_only_occurs_when_explicitly_requested_by_experiment(self):
         source = """from backend.sdk import Waypoint
 
 def run(mc):
@@ -144,9 +144,13 @@ def run(mc):
         control.play([(0,{'left':0,'right':0}),(.1,{'left':.2,'right':.2}),(.2,{'left':0,'right':0})])
 """
         config = {'home':{'lat':25.7583,'lon':-80.3738},'end':{'lat':25.7583,'lon':-80.373775},'heading_deg':90,'speed_mps':1}
-        for visit_end in (True,False):
-            with self.subTest(visit_end=visit_end), tempfile.TemporaryDirectory() as tmp:
-                process,directory,summary = self.run_batch(tmp,{'01_profile.py':source+f'\nVISIT_END = {visit_end}\n','batch.json':json.dumps(config)})
+        for explicit_navigation in (False, True):
+            with self.subTest(explicit_navigation=explicit_navigation), tempfile.TemporaryDirectory() as tmp:
+                script = source
+                if explicit_navigation:
+                    script = script.replace("    with mc.control", "    mc.navigate(Waypoint(25.7583,-80.3738), speed_mps=1, heading_deg=90)\n    with mc.control")
+                    script += '    mc.navigate(Waypoint(25.7583,-80.373775), speed_mps=1)\n    mc.navigate(Waypoint(25.7583,-80.3738), speed_mps=1, heading_deg=90)\n'
+                process,directory,summary = self.run_batch(tmp,{'01_profile.py':script,'batch.json':json.dumps(config)})
                 self.assertEqual(process.returncode,0,process.stderr+(directory/'backend.log').read_text())
                 manifest = json.loads((Path(summary['results'][0]['directory'])/'manifest.json').read_text())
                 self.assertEqual(manifest['recording_errors'],[])
@@ -154,12 +158,32 @@ def run(mc):
                     payloads = [json.loads(m.data)['data'] for _,_,m in make_reader(stream).iter_messages()]
                 self.assertTrue(any(p.get('event') == 'input_profile' for p in payloads))
                 transfers = [p for p in payloads if p.get('event') == 'auto_transfer_started']
-                self.assertEqual(len(transfers),3 if visit_end else 2)
-                self.assertEqual(transfers[-1]['destination'],config['home'])
-                if visit_end:
-                    self.assertEqual(transfers[1]['destination'],config['end'])
-                else:
-                    self.assertFalse(any(p['destination'] == config['end'] for p in transfers))
+                self.assertEqual(len(transfers), 3 if explicit_navigation else 0)
+                if explicit_navigation:
+                    self.assertEqual([p['destination'] for p in transfers],
+                                     [config['home'], config['end'], config['home']])
+
+    def test_movement_goals_complete_in_batch_and_record_feedback_without_schema_errors(self):
+        source = """from backend.sdk import Waypoint
+
+def run(mc):
+    start = Waypoint(25.7583, -80.3738)
+    with mc.control(start=start, heading_deg=90) as control:
+        control.move(speed_mps=0.5, heading_deg=90, duration_s=0.2, acceleration_mps2=0.5)
+        control.turn_to(heading_deg=90)
+        control.go_to(start, speed_mps=0.5)
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            process, directory, summary = self.run_batch(tmp, {"01_movement.py":source})
+            self.assertEqual(process.returncode, 0, process.stderr + (directory/'backend.log').read_text())
+            manifest = json.loads((Path(summary['results'][0]['directory'])/'manifest.json').read_text())
+            self.assertEqual(manifest['status'], 'completed')
+            self.assertEqual(manifest['recording_errors'], [])
+            with Path(manifest['recording']).open('rb') as stream:
+                payloads = [json.loads(m.data)['data'] for _, _, m in make_reader(stream).iter_messages()]
+            self.assertEqual(sum(p.get('event') == 'movement_started' for p in payloads), 3)
+            self.assertEqual(sum(p.get('event') == 'movement_completed' for p in payloads), 3)
+            self.assertTrue(any('target_speed_mps' in p for p in payloads))
 
     def test_failure_neutralizes_saves_partial_run_and_does_not_run_next_file(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -37,6 +37,7 @@ class PositionSourceTests(unittest.TestCase):
             message.longitude = message.lon
             message.alt = 1000
             message.hdg = 9000
+            message.vx, message.vy = 30, 40
             messages.append(message)
         original = list(messages)
         controller.transport.master = controller.master
@@ -47,6 +48,8 @@ class PositionSourceTests(unittest.TestCase):
         self.assertEqual(positions[4:9], [estimated] * 5)
         self.assertEqual(positions[9], (0.0, original[8].lon / 1e7))
         self.assertEqual((controller.lat, controller.lon), positions[9])
+        self.assertEqual(controller.groundspeed, .5)
+        self.assertGreater(controller._last_speed_at, 0)
         self.assertEqual([call.args[0] for call in controller.recorder.log_message.call_args_list], original)
 
 

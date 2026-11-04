@@ -18,6 +18,8 @@ class ManualControlState:
     def suspend(self, active):
         """Allow one programmatic owner to replace the joystick output stream."""
         with self._lock:
+            if self.suspended == active:
+                return
             self.suspended = active
             self.throttle = self.yaw = 0
             self.neutral_ticks = 0

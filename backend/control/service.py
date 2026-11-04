@@ -19,6 +19,7 @@ from .navigation import RouteFollower
 from .planning import Plan, Waypoint, number
 from .recording import RunRecording
 from .profile import InputProfile
+from .motion import Motion
 from .auto import AutoTransfer
 from .storage import RunStore, save_json, stamp
 
@@ -38,6 +39,7 @@ class ControlService:
         self._neutral_adapter = None
         self._record_failure = None
         self.navigator = None
+        self.motion = None
         self.auto_workers = []
         self._route_file = None
         self._routes = None
@@ -150,6 +152,9 @@ class ControlService:
             raise ValueError(f"This session needs {', '.join(keys)}")
         target = {key:number(data["target"][key],-1,1,key) for key in keys}
         valid_for = number(data.get("valid_for_s",0.25),0.05,1,"command lifetime")
+        if self.navigator:
+            raise ValueError("Another motion executor is active")
+        self._clear_motion()
         self.target = {"kind":kind,**target}
         self.profile = None
         self.follower = None
@@ -164,6 +169,7 @@ class ControlService:
         profile = InputProfile(data["keyframes"],keys)
         if self.no_gps and profile.duration > 60:
             raise ValueError("No-GPS test profiles must not exceed 60 seconds")
+        self._clear_motion()
         self.profile = profile
         self.profile_started = time.monotonic()
         self.follower = None
@@ -171,6 +177,65 @@ class ControlService:
         self._lease = self.profile_started+profile.duration+1
         self._write({"event":"input_profile","keyframes_json":json.dumps(data["keyframes"]),"id":self.owner["id"]})
         return {"profile_id":self.owner["profile_id"]}
+
+    def _clear_motion(self, status="replaced"):
+        if self.motion is not None:
+            self.owner["motion_status"] = status
+            self.motion = None
+
+    def movement(self, operation, data):
+        self.require(data.get("id"))
+        if self.no_gps:
+            raise ValueError("Movement goals require GPS and feedback; disabled in no-GPS motor testing")
+        if self._execution or self.navigator:
+            raise ValueError("Another motion executor is active")
+        position, heading, _ = self.adapter.state()
+        motion = Motion(operation, data, heading)
+        if self.owner["mode"] == "live" and operation != "turn_to":
+            self._check_speed_feedback()
+        if motion.destination is not None:
+            issue = self._area.segment_issue(position, motion.destination)
+            if issue:
+                raise ValueError("Movement crosses an operating-area constraint: " + issue)
+        # Validate the entire request before replacing the previous intent.
+        self.motion = motion
+        self.motion_started = time.monotonic()
+        self.profile = self.follower = self.target = None
+        self.owner.update(motion_id=uuid4().hex, motion_status="active", motion_operation=operation,
+                          profile_id=None, profile_complete=False)
+        if motion.destination is not None:
+            self.owner["waypoints"] = [asdict(position), asdict(motion.destination)]
+        self._lease = self.motion_started + motion.duration + 1
+        self._write({"event":"movement_started", "id":self.owner["id"],
+                     "motion_id":self.owner["motion_id"], "motion_json":json.dumps(data)})
+        return {"motion_id":self.owner["motion_id"]}
+
+    def _check_speed_feedback(self):
+        c = self.runtime.controller
+        if time.monotonic() - c._last_speed_at > 1 or not math.isfinite(c.groundspeed) or c.groundspeed < 0:
+            raise ValueError("Movement requires fresh, finite ground-speed feedback")
+
+    def stop_movement(self, data):
+        self.require(data.get("id"))
+        if data.get("motion_id") is not None and (data["motion_id"] != self.owner.get("motion_id")
+                                                   or self.owner.get("motion_status") != "active"):
+            return {"ok":True}
+        if self._execution or self.navigator:
+            raise ValueError("Cancel the active execution before stopping direct control")
+        self._clear_motion("cancelled")
+        self.owner.update(profile_id=None, profile_complete=False)
+        self.profile = self.follower = None
+        self._neutral_target()
+        self.adapter.neutral()
+        self._lease = time.monotonic() + 2
+        self._write({"event":"movement_stopped", "id":self.owner["id"]})
+        return {"ok":True}
+
+    def _neutral_target(self):
+        keys = ("throttle", "steering") if self.owner["kind"] == "axes" else ("left", "right")
+        self.target = {"kind":self.owner["kind"], **dict.fromkeys(keys, 0.0)}
+        self.owner.update(throttle=0.0, steering=0.0, left=0.0, right=0.0,
+                          requested_throttle=0.0, target_speed_mps=0.0)
 
     def navigate(self, data):
         if self.no_gps: raise ValueError("Waypoint/AUTO navigation is disabled in no-GPS motor test mode")
@@ -212,6 +277,7 @@ class ControlService:
         if self._area.segment_issue(position,plan.waypoints[0]):
             raise ValueError("The approach to the replacement path crosses an operating-area constraint")
         self.follower = RouteFollower(plan)
+        self._clear_motion()
         self.profile = None
         self.target = None
         self._lease = time.monotonic()+lifetime
@@ -258,6 +324,7 @@ class ControlService:
         if token is not None and token != self.owner["id"]:
             return {"ok":True}
         owner = self.owner
+        self._clear_motion(status)
         if self.navigator:
             self.navigator.cancel()
             self.navigator = None
@@ -338,6 +405,28 @@ class ControlService:
                 self._write({"event":"control_state",**self.owner})
                 if completed: self.release(status="completed",reason="AUTO destination and heading reached")
                 return
+            if self.motion:
+                motion = self.motion
+                if self.owner["mode"] == "live" and motion.operation != "turn_to":
+                    self._check_speed_feedback()
+                if motion.destination is not None and self._area.segment_issue(position, motion.destination):
+                    raise ValueError("Movement left the safe destination corridor")
+                throttle, steering, completed = motion.step(now-self.motion_started, dt, position, heading, speed)
+                if completed:
+                    self._clear_motion("completed")
+                    self._neutral_target()
+                    self.adapter.neutral()
+                    self._lease = now + 2
+                    self._write({"event":"movement_completed", "id":self.owner["id"],
+                                 "motion_id":self.owner["motion_id"]})
+                else:
+                    if self.owner["kind"] == "axes":
+                        self.target = {"kind":"axes", "throttle":throttle, "steering":steering}
+                    else:
+                        scale = max(1, abs(throttle+steering), abs(throttle-steering))
+                        self.target = {"kind":"thrusters", "left":(throttle+steering)/scale,
+                                       "right":(throttle-steering)/scale}
+                    self.owner.update(target_speed_mps=motion.target_speed, target_heading_deg=motion.heading)
             if self.profile:
                 values,completed = self.profile.evaluate(now-self.profile_started)
                 self.target = {"kind":self.owner["kind"],**values}
@@ -457,6 +546,8 @@ class ControlService:
         if operation == "acquire": return self.acquire(data)
         if operation == "set": return self.set_target(data)
         if operation == "play": return self.play(data)
+        if operation in {"move", "turn_to", "go_to"}: return self.movement(operation, data)
+        if operation == "control_stop": return self.stop_movement(data)
         if operation == "navigate": return self.navigate(data)
         if operation == "follow": return self.follow(data)
         if operation == "release": return self.release(data.get("id"))

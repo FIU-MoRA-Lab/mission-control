@@ -77,20 +77,21 @@ class NoGpsTests(unittest.TestCase):
         state['armed'] = False
         self.assertEqual(live_blockers(state,no_gps=True),['vehicle disarmed'])
 
-    def test_all_nine_cases_have_finite_nogps_input_sequences(self):
+    def test_numbered_cases_do_not_substitute_raw_throttle_for_missing_speed_feedback(self):
         from contextlib import contextmanager
         class BenchClient:
             testing_without_gps = True
-            def __init__(self): self.frames=[]
+            def navigate(self,*args,**kwargs): raise ValueError('Navigation requires GPS feedback')
             @contextmanager
             def control(self,**kwargs): yield self
-            def play(self,frames): self.frames.append(frames)
-            def run(self,*args,**kwargs): raise AssertionError('No-GPS case attempted waypoint execution')
+            def move(self,**kwargs): raise ValueError('Movement requires feedback')
+            def go_to(self,*args,**kwargs): raise ValueError('Movement requires feedback')
+            def turn_to(self,**kwargs): raise ValueError('Movement requires feedback')
+            def run(self,*args,**kwargs): raise ValueError('Path requires GPS feedback')
         for entry in discover([ROOT/'experiments']):
             client = BenchClient()
-            entry.function(client)
-            self.assertEqual(len(client.frames),1)
-            self.assertLessEqual(client.frames[0][-1][0],60)
+            with self.assertRaisesRegex(ValueError, 'feedback'):
+                entry.function(client)
 
 
 if __name__ == '__main__': unittest.main()

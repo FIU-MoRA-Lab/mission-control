@@ -1,20 +1,19 @@
-"""Steady equal-throttle inputs; measured speed is a result, not a setpoint."""
+"""Travel from start to end at a fixed normalized thrust input."""
 from functools import partial
-from backend.sdk import Plan, Leg, Constant
-from experiments._common import HOME, END, thrust, steady
+from backend.sdk import ConstantThrottle, Leg, Plan
+from experiments._common import START, END, START_HEADING_DEG, TRANSIT_SPEED_MPS
 
 
-def straight(mc, level):
-    if getattr(mc,"testing_without_gps",False):
-        with thrust(mc) as control:
-            steady(control,5,level,level)
-        return
-    plan = Plan([Leg(HOME,END,Constant(level))],arrival_radius_m=1)
-    mc.run(f"straight-{round(level*100)}-to-east",plan).wait_until_finished()
+def straight(mc, thrust):
+    mc.navigate(START, speed_mps=TRANSIT_SPEED_MPS, heading_deg=START_HEADING_DEG)
+    plan = Plan([Leg(START, END, throttle=ConstantThrottle(thrust))], arrival_radius_m=1)
+    mc.run(f"straight-{round(thrust * 100)}", plan).wait_until_finished()
+    mc.navigate(START, speed_mps=TRANSIT_SPEED_MPS, heading_deg=START_HEADING_DEG)
 
 
 EXPERIMENTS = {
-    "straight-20": partial(straight, level=.2),
-    "straight-50": partial(straight, level=.5),
-    "straight-80": partial(straight, level=.8),
+    "straight-25": partial(straight, thrust=0.25),
+    "straight-50": partial(straight, thrust=0.50),
+    "straight-75": partial(straight, thrust=0.75),
+    "straight-100": partial(straight, thrust=1.00),
 }

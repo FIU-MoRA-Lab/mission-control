@@ -54,6 +54,58 @@ class Control:
     def __init__(self,client,info):
         self.client,self.id,self.kind = client,info["id"],info["kind"]
 
+    def move(self, *, speed_mps, duration_s, heading_deg=None, turn_rate_deg_s=None,
+             acceleration_mps2=None):
+        """Maintain measured speed for a backend-timed duration, then command neutral.
+
+        Omit heading to hold the starting heading. Alternatively specify a clockwise
+        turn rate in degrees/second. Blocks until the duration ends; no caller sleep.
+        Optional acceleration bounds the speed reference on entry and exit, within
+        duration_s. This controls the reference, not guaranteed physical acceleration.
+        """
+        return self._movement("move", speed_mps=speed_mps, duration_s=duration_s,
+                              heading_deg=heading_deg, turn_rate_deg_s=turn_rate_deg_s,
+                              acceleration_mps2=acceleration_mps2)
+
+    def turn_to(self, *, heading_deg, tolerance_deg=3, timeout_s=60):
+        """Turn in place to a compass heading; return once aligned, or raise on timeout.
+
+        Commands zero forward thrust; this does not hold geographic position in drift.
+        """
+        return self._movement("turn_to", heading_deg=heading_deg,
+                              tolerance_deg=tolerance_deg, timeout_s=timeout_s)
+
+    def go_to(self, destination, *, speed_mps=1, arrival_radius_m=1, timeout_s=180):
+        """Navigate a validated direct segment; command neutral on arrival and return."""
+        return self._movement("go_to", destination=asdict(destination), speed_mps=speed_mps,
+                              arrival_radius_m=arrival_radius_m, timeout_s=timeout_s)
+
+    def stop(self):
+        """Cancel this session's movement and command neutral immediately."""
+        return self.client._call("control_stop", id=self.id)
+
+    def _movement(self, operation, **data):
+        info = self.client._call(operation, id=self.id, **data)
+        try:
+            while True:
+                control = self.client.state()["sdk"]["control"]
+                if not control or control["id"] != self.id or control["status"] != "active":
+                    raise RuntimeError("Movement stopped: " + (control or {}).get("reason", "control unavailable"))
+                if control.get("motion_id") != info["motion_id"]:
+                    raise RuntimeError("Movement replaced by another request")
+                if control.get("motion_status") == "completed":
+                    return control
+                if control.get("motion_status") != "active":
+                    raise RuntimeError("Movement " + control.get("motion_status", "unavailable"))
+                time.sleep(0.05)
+        except BaseException:
+            # A cancelled wait must not leave this movement running or stop its replacement.
+            try:
+                self.client._call("control_stop", id=self.id, motion_id=info["motion_id"])
+            except Exception:
+                pass
+            raise
+
     def set(self, *, valid_for_s=0.25, **target):
         """Replace the output target. It expires unless refreshed, including on crashes."""
         return self.client._call("set",id=self.id,target=target,valid_for_s=valid_for_s)
@@ -162,6 +214,11 @@ class MissionControl:
     def _call(self,operation,**data):
         return self._request("/command",{"action":"sdk","operation":operation,**data})
 
+    def _wait_for_neutral(self):
+        """Allow an earlier release's neutral transmissions to finish; never navigate."""
+        while self.state()["sdk"].get("neutralizing", False):
+            time.sleep(0.05)
+
     def state(self):
         return self._request("/sdk/state")
 
@@ -180,6 +237,7 @@ class MissionControl:
 
     @contextmanager
     def control(self,mode=None,*,kind="axes",start=None,end=None,heading_deg=0):
+        self._wait_for_neutral()
         info = self._call("acquire",mode=mode or self.default_mode,kind=kind,start=asdict(start) if start else None,end=asdict(end) if end else None,heading_deg=heading_deg)
         control = Control(self,info)
         self._controls.append(control)
@@ -212,10 +270,12 @@ class MissionControl:
     def run(self,name,plan,*,mode=None,output_dir=None,metadata=None):
         data = dict(name=name,plan=plan.to_dict(),mode=mode or self.default_mode,metadata=metadata or {})
         if output_dir is not None: data["output_dir"] = str(output_dir)
+        self._wait_for_neutral()
         return Run(self,self._call("execute",**data))
 
     def navigate(self, destination, *, speed_mps=1, heading_deg=None, timeout_s=180):
         """Use a verified AUTO transfer in live mode; simulate the same transfer offline."""
+        self._wait_for_neutral()
         info = self._call("navigate",mode=self.default_mode,destination=asdict(destination),
                           speed_mps=speed_mps,heading_deg=heading_deg,timeout_s=timeout_s)
         try:

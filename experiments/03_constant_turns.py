@@ -1,17 +1,17 @@
-"""Fixed mean demand of 30%, with increasing left/right differences."""
+"""Maintain 0.6 m/s while turning clockwise at three angular rates."""
 from functools import partial
-from experiments._common import thrust, steady
-
-VISIT_END = False  # Circle maneuvers return directly to the start/home point.
+from experiments._common import START, END, START_HEADING_DEG, TRANSIT_SPEED_MPS
 
 
-def turn(mc, difference):
-    with thrust(mc) as control:
-        steady(control, 5, .3 + difference / 2, .3 - difference / 2)
+def turn(mc, turn_rate_deg_s):
+    mc.navigate(START, speed_mps=TRANSIT_SPEED_MPS, heading_deg=START_HEADING_DEG)
+    with mc.control(start=START, end=END, heading_deg=START_HEADING_DEG) as control:
+        control.move(speed_mps=0.6, turn_rate_deg_s=turn_rate_deg_s, duration_s=5)
+    mc.navigate(START, speed_mps=TRANSIT_SPEED_MPS, heading_deg=START_HEADING_DEG)
 
 
 EXPERIMENTS = {
-    "turn-difference-10": partial(turn, difference=.1),
-    "turn-difference-20": partial(turn, difference=.2),
-    "turn-difference-40": partial(turn, difference=.4),
+    "turn-6-deg-per-s": partial(turn, turn_rate_deg_s=6),
+    "turn-12-deg-per-s": partial(turn, turn_rate_deg_s=12),
+    "turn-24-deg-per-s": partial(turn, turn_rate_deg_s=24),
 }

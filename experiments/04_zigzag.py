@@ -1,9 +1,11 @@
-"""Continuous differential inputs alternating while retaining mean forward demand."""
-from experiments._common import thrust, inputs
+"""Alternate timed moves northeast and southeast; each move ends at neutral."""
+from experiments._common import START, END, START_HEADING_DEG, TRANSIT_SPEED_MPS
 
 
 def run(mc):
-    with thrust(mc) as control:
-        control.play([(0,inputs(0,0)),(.5,inputs(.4,.2)),
-                      (3,inputs(.2,.4)),(6,inputs(.4,.2)),
-                      (9,inputs(.2,.4)),(11.5,inputs(.2,.4)),(12,inputs(0,0))])
+    mc.navigate(START, speed_mps=TRANSIT_SPEED_MPS, heading_deg=START_HEADING_DEG)
+    with mc.control(start=START, end=END, heading_deg=START_HEADING_DEG) as control:
+        for heading_deg in (70, 110, 70, 110):
+            control.move(speed_mps=0.6, heading_deg=heading_deg, duration_s=3)
+    mc.navigate(END, speed_mps=TRANSIT_SPEED_MPS)
+    mc.navigate(START, speed_mps=TRANSIT_SPEED_MPS, heading_deg=START_HEADING_DEG)

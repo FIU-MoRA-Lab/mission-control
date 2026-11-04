@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import asdict
 from types import SimpleNamespace
 from unittest.mock import patch
 from mcap.reader import make_reader
@@ -14,7 +15,7 @@ from backend.controller.runtime import ControllerRuntime
 from backend.controller.vehicle_control import VehicleController
 from backend.logger.session_recorder import SessionRecorder
 from backend.mapping.constraints import OperatingArea, waypoint, xy
-from backend.control.planning import Waypoint, Plan, Leg, Linear, Constant
+from backend.control.planning import Waypoint, Plan, Leg, LinearThrottleRamp, ConstantThrottle
 from backend.control.adapter import Adapter, PARAMETERS
 from backend.bridge.http_server import make_server
 from backend.sdk import MissionControl
@@ -38,7 +39,7 @@ def lake(outline=None, fountains=()):
 class GeometryTests(unittest.TestCase):
     def test_entire_segment_excludes_fountain_even_with_valid_endpoints(self):
         area = OperatingArea(lake(fountains=[(0,0)]))
-        plan = Plan([Leg(point(-10,0),point(10,0),Constant(.2))])
+        plan = Plan([Leg(point(-10,0),point(10,0),ConstantThrottle(.2))])
         self.assertFalse(area.validate(plan)["valid"])
         self.assertEqual(area.validate(plan)["issues"][0]["reason"],"fountain_exclusion")
 
@@ -109,7 +110,7 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(self.service.adapter.speed,0)
 
     def test_plan_executes_without_client_and_publishes_its_own_files(self):
-        plan = Plan([Leg(ORIGIN,point(0,6),Constant(.5))],arrival_radius_m=.5)
+        plan = Plan([Leg(ORIGIN,point(0,6),ConstantThrottle(.5))],arrival_radius_m=.5)
         info = self.service.execute({"name":"example","plan":plan.to_dict()})
         now = time.monotonic()
         for index in range(100):
@@ -130,10 +131,10 @@ class ControlTests(unittest.TestCase):
 
     def test_streaming_replacement_validates_before_installing_and_expires(self):
         info = self.acquire()
-        first = Plan([Leg(ORIGIN,point(0,10),Constant(.2))])
+        first = Plan([Leg(ORIGIN,point(0,10),ConstantThrottle(.2))])
         self.service.follow({"id":info["id"],"plan":first.to_dict(),"valid_for_s":.5})
         follower = self.service.follower
-        outside = Plan([Leg(ORIGIN,point(80,0),Constant(.2))])
+        outside = Plan([Leg(ORIGIN,point(80,0),ConstantThrottle(.2))])
         with self.assertRaises(ValueError):
             self.service.follow({"id":info["id"],"plan":outside.to_dict()})
         self.assertIs(self.service.follower,follower)
@@ -202,7 +203,7 @@ class ControlTests(unittest.TestCase):
         self.assertIn('clearance',self.service.last['reason'])
 
     def test_invalid_plan_creates_no_run_and_does_not_acquire(self):
-        plan = Plan([Leg(ORIGIN,point(70,0),Constant(.2))])
+        plan = Plan([Leg(ORIGIN,point(70,0),ConstantThrottle(.2))])
         with self.assertRaises(ValueError): self.service.execute({"plan":plan.to_dict()})
         self.assertFalse(self.service.busy)
         self.assertFalse((Path(self.temp.name)/"runs").exists())
@@ -250,26 +251,30 @@ class ControlTests(unittest.TestCase):
         for actual,expected in zip(samples,[0.0,123.4,567.8,999.9]):
             self.assertAlmostEqual(actual,expected)
 
-    def test_all_straight_cases_reach_east_before_they_complete(self):
+    def test_acceleration_and_four_straight_cases_reach_east_before_they_complete(self):
         from experiments._common import HOME, END
         from backend.batch import discover
-        entries = discover([Path(__file__).resolve().parents[1]/'experiments'])[:4]
+        entries = discover([Path(__file__).resolve().parents[1]/'experiments'])[:5]
         service = self.service
         class Handle:
             def wait_until_finished(inner):
-                now = time.monotonic()
+                now = service._started
+                peak = 0
                 for index in range(20000):
                     service.tick(now+index*.05)
                     if not service.busy: break
+                    peak = max(peak, service.owner['throttle'])
                 self.assertEqual(service.last['status'],'completed',service.last['reason'])
+                self.assertAlmostEqual(peak, expected_peak, delta=.02)
                 actual = Waypoint(service.last['lat'],service.last['lon'])
                 self.assertLessEqual(math.hypot(*xy(actual,END)),1.01)
                 service.finalizers[-1].join(5)
         class Client:
-            def run(inner,name,plan):
-                service.execute({'name':name,'plan':plan.to_dict()})
+            def navigate(inner, destination, **kwargs): pass
+            def run(inner, name, plan):
+                service.execute({'name':name, 'plan':plan.to_dict()})
                 return Handle()
-        for entry in entries:
+        for entry, expected_peak in zip(entries, (1, .25, .5, .75, 1)):
             service.last = None  # Explicit independent simulation fixture at HOME.
             entry.function(Client())
 
@@ -292,6 +297,127 @@ class ControlTests(unittest.TestCase):
             if not self.service.busy: break
         self.assertEqual(self.service.last["status"],"completed")
         self.assertLess(abs((self.service.last["heading"]-90+180)%360-180),3.1)
+
+    def advance_movement(self, seconds):
+        began = self.service.motion_started
+        for i in range(1, round(seconds / .05) + 1):
+            self.service.tick(began + i * .05)
+            if not self.service.busy or self.service.motion is None:
+                break
+
+    def test_timed_move_tracks_speed_and_stops_without_client_updates(self):
+        info = self.acquire()
+        self.service.movement("move", {"id":info["id"], "speed_mps":1, "duration_s":10})
+        self.advance_movement(8)
+        self.assertAlmostEqual(self.service.adapter.speed, 1, delta=.08)
+        self.assertAlmostEqual(self.service.adapter.heading, 0)
+        self.service.tick(self.service.motion_started + 10)
+        self.assertEqual(self.service.owner["motion_status"], "completed")
+        self.assertEqual(self.service.adapter.speed, 0)
+        self.assertEqual(self.service.target["throttle"], 0)
+        # Backend completion does not need a connected client to neutralize outputs.
+        self.service.tick(self.service.motion_started + 13)
+        self.assertFalse(self.service.busy)
+
+    def test_heading_goal_takes_shortest_turn_and_finishes_with_zero_translation(self):
+        info = self.acquire(kind="thrusters", heading_deg=350)
+        self.service.movement("turn_to", {"id":info["id"], "heading_deg":10})
+        self.advance_movement(10)
+        self.assertEqual(self.service.owner["motion_status"], "completed")
+        self.assertLess(abs((self.service.adapter.heading-10+180)%360-180), 3)
+        self.assertEqual(self.service.adapter.position, ORIGIN)
+        self.assertEqual(self.service.target["left"], 0)
+        self.assertEqual(self.service.target["right"], 0)
+
+    def test_position_goal_reaches_destination_and_neutralizes(self):
+        info = self.acquire()
+        destination = point(5, 6)
+        self.service.movement("go_to", {"id":info["id"], "destination":asdict(destination), "speed_mps":1})
+        self.advance_movement(40)
+        self.assertEqual(self.service.owner["motion_status"], "completed")
+        self.assertLessEqual(math.hypot(*xy(self.service.adapter.position, destination)), 1)
+        self.assertEqual(self.service.adapter.speed, 0)
+
+    def test_movement_validation_preserves_active_intent_and_replacement_is_identifiable(self):
+        info = self.acquire()
+        command = {"id":info["id"], "speed_mps":.5, "duration_s":5}
+        first = self.service.movement("move", command)
+        motion = self.service.motion
+        for invalid in ({"speed_mps":float("nan")}, {"duration_s":0},
+                        {"heading_deg":90, "turn_rate_deg_s":10}):
+            with self.assertRaises(ValueError):
+                self.service.movement("move", {**command, **invalid})
+            self.assertIs(self.service.motion, motion)
+        with self.assertRaisesRegex(ValueError, "constraint"):
+            self.service.movement("go_to", {"id":info["id"], "destination":asdict(point(80, 0))})
+        self.assertIs(self.service.motion, motion)
+        second = self.service.movement("move", command)
+        self.assertNotEqual(first["motion_id"], second["motion_id"])
+        self.service.stop_movement({"id":info["id"], "motion_id":first["motion_id"]})
+        self.assertIsNotNone(self.service.motion)
+        self.service.stop_movement({"id":info["id"]})
+        self.assertIsNone(self.service.motion)
+        self.assertEqual(self.service.owner["motion_status"], "cancelled")
+
+    def test_unreached_goal_times_out_and_raw_command_replaces_movement(self):
+        info = self.acquire()
+        self.service.movement("turn_to", {"id":info["id"], "heading_deg":180, "timeout_s":.1})
+        self.advance_movement(.2)
+        self.assertFalse(self.service.busy)
+        self.assertIn("timed out", self.service.last["reason"])
+        self.assertEqual(self.service.last["motion_status"], "failed")
+        info = self.acquire()
+        self.service.movement("move", {"id":info["id"], "speed_mps":1, "duration_s":5})
+        self.service.set_target({"id":info["id"], "target":{"throttle":.2, "steering":0}})
+        self.assertIsNone(self.service.motion)
+        self.assertEqual(self.service.owner["motion_status"], "replaced")
+
+    def test_no_gps_rejects_movement_goals_instead_of_using_throttle_as_speed(self):
+        self.runtime.testing_without_gps = True
+        info = self.acquire()
+        for operation in ("move", "turn_to", "go_to"):
+            with self.assertRaisesRegex(ValueError, "feedback"):
+                self.service.movement(operation, {"id":info["id"]})
+
+    def test_live_movement_requires_fresh_speed_feedback(self):
+        # Use the simulated adapter as a state source to isolate speed freshness.
+        info = self.acquire()
+        self.service.owner["mode"] = "live"
+        command = {"id":info["id"], "speed_mps":1, "duration_s":5}
+        with self.assertRaisesRegex(ValueError, "ground-speed"):
+            self.service.movement("move", command)
+        self.controller._last_speed_at = time.monotonic()
+        self.service.movement("move", command)
+        self.controller._last_speed_at -= 2
+        self.service.tick()
+        self.assertFalse(self.service.busy)
+        self.assertIn("ground-speed", self.service.last["reason"])
+
+    def test_real_client_waits_for_backend_timed_movement_and_can_reuse_scope(self):
+        server = make_server(self.runtime, "test-token")
+        serving = threading.Thread(target=server.serve_forever, daemon=True)
+        serving.start()
+        self.runtime.worker.start()
+        try:
+            mc = MissionControl(f"http://127.0.0.1:{server.server_port}", "test-token")
+            with mc:
+                with mc.record("movement") as run:
+                    with mc.control(start=ORIGIN) as control:
+                        result = control.move(speed_mps=.5, heading_deg=0, duration_s=.15)
+                        self.assertEqual(result["motion_status"], "completed")
+                        self.assertEqual(result["throttle"], 0)
+                        result = control.turn_to(heading_deg=0)
+                        self.assertEqual(result["motion_status"], "completed")
+                        result = control.go_to(ORIGIN)
+                        self.assertEqual(result["motion_status"], "completed")
+                        control.stop()
+                self.assertEqual(run.status()["status"], "completed")
+                self.assertTrue((run.directory / "recording.mcap").exists())
+        finally:
+            self.runtime._stop.set()
+            self.runtime.worker.join(2)
+            server.shutdown()
+            server.server_close()
 
     def test_live_home_transfer_uses_auto_and_restores_manual_without_arming(self):
         c = self.controller

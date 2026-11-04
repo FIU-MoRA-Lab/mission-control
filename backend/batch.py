@@ -27,7 +27,6 @@ class Entry:
     name: str
     path: Path
     function: object
-    visit_end: bool = True
 
 
 def discover(paths):
@@ -48,9 +47,6 @@ def discover(paths):
         sys.modules[name] = module
         spec.loader.exec_module(module)
         functions = getattr(module,"EXPERIMENTS",None)
-        visit_end = getattr(module,"VISIT_END", True)
-        if not isinstance(visit_end, bool):
-            raise ValueError(f"{path}: VISIT_END must be a boolean")
         if functions is None:
             callback = getattr(module,"run",None)
             functions = {path.stem:callback} if callback else {}
@@ -62,7 +58,7 @@ def discover(paths):
             if inspect.iscoroutinefunction(callback):
                 raise ValueError(f"{path}: use a synchronous function accepting mc")
             inspect.signature(callback).bind(None)
-            entries.append(Entry(label,path,callback,visit_end))
+            entries.append(Entry(label,path,callback))
     if not entries:
         raise ValueError("No run(mc) functions or EXPERIMENTS mappings found")
     return entries
@@ -146,7 +142,7 @@ def settle(mc):
             mc._call("release",id=control["id"])
 
 
-def execute(entries, mc, directory, setup=None):
+def execute(entries, mc, directory):
     summary = {"testing_without_gps":getattr(mc,"testing_without_gps",False),"mode":mc.default_mode,"status":"running","results":[]}
     save_json(directory/"results.json",summary)
     try:
@@ -162,10 +158,6 @@ def execute(entries, mc, directory, setup=None):
                     result.update(id=run.id,directory=str(run.directory))
                     (run.directory/"source.py").write_bytes(source)
                     try:
-                        if setup and index == 1:
-                            from backend.sdk import Waypoint
-                            mc.navigate(Waypoint(**setup["home"]),speed_mps=setup.get("speed_mps",1),heading_deg=setup.get("heading_deg"))
-                            settle(mc)
                         if mc.default_mode == "live":
                             mc.read_parameters()
                         returned = entry.function(mc)
@@ -173,19 +165,6 @@ def execute(entries, mc, directory, setup=None):
                             if inspect.iscoroutine(returned): returned.close()
                             raise ValueError("Batch functions must be synchronous")
                         settle(mc)
-                        if setup:
-                            from backend.sdk import Waypoint
-                            from backend.mapping.constraints import xy
-                            if setup.get("end") and entry.visit_end:
-                                import math
-                                destination = Waypoint(**setup["end"])
-                                state = mc.state()
-                                position = Waypoint(state["lat"],state["lon"])
-                                if math.hypot(*xy(destination,position)) > 1:
-                                    mc.navigate(destination,speed_mps=setup.get("speed_mps",1))
-                                    settle(mc)
-                            mc.navigate(Waypoint(**setup["home"]),speed_mps=setup.get("speed_mps",1),heading_deg=setup.get("heading_deg"))
-                            settle(mc)
                     finally:
                         mc._call("release")
                 status = run.status()
@@ -298,12 +277,7 @@ def main(argv=None):
                             "vehicle":{key:state.get(key) for key in ("connected","mode","armed","fix","satellites","lat","lon")},
                         })
                     wait_for_vehicle(mc,args.startup_timeout,report=report,no_gps=args.no_gps)
-                config_paths = {entry.path.parent/"batch.json" for entry in entries}
-                configs = [json.loads(path.read_text()) for path in config_paths if path.exists()]
-                if len(configs)>1: raise ValueError("A batch must use one common home configuration")
-                setup = configs[0] if configs and not args.no_gps else None
-                if setup: save_json(directory/"batch.json",setup)
-                execute(entries,mc,directory,setup=setup)
+                execute(entries,mc,directory)
             except Exception as exc:
                 if ui and ui.poll() is None:
                     mc._call("release")

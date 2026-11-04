@@ -16,7 +16,7 @@ The layout and controls are unchanged.
 Run one file, choose a log root, or list the order without starting a backend:
 
 ```bash
-uv run mission-control run experiments/direct_control.py --mode simulation
+uv run mission-control run experiments/02_straight_runs.py --mode simulation
 uv run mission-control run experiments/ --output-dir ./logs/batches
 uv run mission-control run experiments/ --list
 ```
@@ -26,8 +26,8 @@ Each file defines an ordinary synchronous function:
 ```python
 def run(mc):
     from backend.sdk import Waypoint
-    with mc.control(kind="thrusters", start=Waypoint(25.7581, -80.37365)) as control:
-        control.hold(3, left=0.2, right=-0.2)
+    with mc.control(start=Waypoint(25.7581, -80.37365)) as control:
+        control.move(speed_mps=0.6, heading_deg=90, duration_s=5)
 ```
 
 For several experiments in one file, expose an ordered mapping instead:
@@ -35,11 +35,11 @@ For several experiments in one file, expose an ordered mapping instead:
 ```python
 def straight(mc):
     with mc.control(start=start) as control:
-        control.hold(5, throttle=0.2, steering=0)
+        control.move(speed_mps=0.5, heading_deg=90, duration_s=5)
 
 def turn(mc):
     with mc.control(start=start) as control:
-        control.hold(5, throttle=0.2, steering=0.1)
+        control.move(speed_mps=0.5, turn_rate_deg_s=12, duration_s=5)
 
 EXPERIMENTS = {"straight": straight, "turn": turn}
 ```
@@ -64,8 +64,9 @@ root). The backend session recordings are kept in that batch's `session/`
 subfolder; experiment recordings remain under its `runs/` subfolder. Every run includes its source
 file and SHA-256 hash, metadata, area snapshot, MCAP/JSONL logs and any path
 snapshots. Failure or Ctrl+C preserves partial recordings and stops the batch;
-there is no automatic continue-on-failure. A folder-level `batch.json` can
-configure a verified AUTO home transfer after successful cases.
+there is no automatic continue-on-failure. The runner never issues navigation
+commands or reads movement policy from a configuration file. Initial positioning,
+endpoint visits and return movements must be explicit in each experiment.
 
 **Live batches are explicit:**
 
@@ -77,15 +78,14 @@ The runner waits for connection, MANUAL mode and arming, then reads parameters.
 Use the existing UI or your vehicle's operator controls to establish that state.
 The runner does not change configuration, modes or arming. `mc.control()` and
 `mc.run()` inherit the selected batch mode; a batch backend rejects a conflicting
-mode requested by a script. A home transfer can be configured in `batch.json`; other repositioning and
-mapping changes between live experiments must be explicit. The maneuver suite uses two-paddle thruster inputs consistently; live mappings
+mode requested by a script. Repositioning and mapping changes must be explicit
+in the experiment code. The numbered acceleration/straight experiments use position-based thrust paths;
+other cases use speed/heading goals. Live mappings
 still need to match the vehicle as described below.
 
 For ad hoc scripts that attach to an already running app, start
 `uv run mission-control --demo` first, then use `MissionControl.connect()` as
-shown below. The standalone example commands remain available with
-`uv run python -m experiments.direct_control` and
-`uv run python -m experiments.route_from_map`.
+shown below. The numbered scripts in `experiments/` are the runnable examples.
 
 ```python
 from backend.sdk import MissionControl
@@ -104,7 +104,60 @@ explicit descriptor when more than one backend is running. The backend owns the
 vehicle connection; scripts never open a second MAVLink transport. Discovery is
 currently local to the same machine and checkout/data root.
 
-## Controls
+## Movement commands
+
+A control scope exclusively owns vehicle output. Use movement goals in physical
+units; the backend computes motor inputs from measured ground speed and heading.
+
+```python
+with mc.control(start=start) as control:
+    control.move(speed_mps=1.2, heading_deg=90, duration_s=5)
+    control.turn_to(heading_deg=180)
+    control.go_to(destination, speed_mps=0.8)
+    control.stop()
+```
+
+Each call blocks until its action finishes. `move()` requires `duration_s`; the
+backend owns timing, and requests neutral at the end without needing another
+client message. Omitting `heading_deg` holds the measured starting heading.
+`turn_to()` turns without forward thrust, waits until heading is within
+`tolerance_deg=3` for 0.3 s, then requests neutral. This does not hold geographic
+position against drift. `go_to()` validates the direct segment, steers toward the
+destination and requests neutral within `arrival_radius_m=1`. It does not plan
+around obstacles. Goal timeouts (`timeout_s=60` for turns, `180` for navigation)
+fail and neutralize the scope instead of reporting success.
+
+For curved travel, supply `turn_rate_deg_s` instead of `heading_deg`. Positive
+rates rotate the heading reference clockwise; the feedback controller follows it.
+For acceleration/deceleration, supply `acceleration_mps2`: the speed reference
+increases from zero and decreases toward zero within the total duration. Short
+moves may not reach the requested peak. These are requested speed-reference
+limits, not guaranteed physical acceleration.
+
+```python
+control.move(speed_mps=0.6, turn_rate_deg_s=12, duration_s=5)
+control.move(speed_mps=1, acceleration_mps2=0.2, heading_deg=90, duration_s=10)
+```
+
+Current limits are forward speed 0–2 m/s, duration 0.05–600 s, headings 0–360°,
+and turn rates ±60°/s. Speed control uses bounded PI feedback; heading uses
+proportional steering. Live movement requires fresh estimated position, heading,
+and ground speed (from `GLOBAL_POSITION_INT` velocity or `VFR_HUD`). Initial
+controller gains have been checked in the kinematic simulator, not tuned on the
+physical boat. Requested speed/turn rate can exceed vehicle capability.
+
+A replacement command cancels the previous intent. Rejected requests leave it
+intact. Movement IDs prevent a cancelled caller from stopping a newer movement.
+Ctrl+C during a wait requests cancellation. Backend execution is finite even if
+the client disappears. Completed movements leave a two-second neutral window for
+the next command, after which ownership expires. `stop()` cancels the current
+movement and immediately requests neutral; neutral is not active braking.
+
+No-GPS motor-testing mode rejects these goals instead of substituting throttle
+percentages for speed. Existing raw-control methods below remain available for
+motor calibration and caller-provided controllers.
+
+## Raw controls
 
 Controls are general normalized demands, not physical thrust in newtons, motor
 RPM, electrical power, or guaranteed speed. `-1` is reverse/left, `0` is neutral,
@@ -182,11 +235,14 @@ the backend, independently of the script. The first implementation is a small
 lookahead/heading controller; it is not a calibrated dynamics controller.
 
 ```python
-from backend.sdk import Plan, Leg, Linear, Constant
+from backend.sdk import Plan, Leg, LinearThrottleRamp, ConstantThrottle
 
 A, B, C = mc.routes.get("test-line")
 plan = Plan(
-    legs=[Leg(A, B, Linear(0, 1)), Leg(B, C, Linear(1, 0))],
+    legs=[
+        Leg(A, B, throttle=LinearThrottleRamp(start=0, end=1)),
+        Leg(B, C, throttle=LinearThrottleRamp(start=1, end=0)),
+    ],
     launch_throttle=0.05,
 )
 print(mc.validate(plan))
@@ -195,10 +251,14 @@ run = mc.run("ramp", plan)             # mode="simulation" by default.
 run.wait_until_finished()
 ```
 
-A linear profile follows position along its active segment. Starting at zero
+`LinearThrottleRamp(start=0, end=1)` increases throttle from 0% to 100% with
+distance along a leg; `LinearThrottleRamp(start=1, end=0)` decreases it.
+`ConstantThrottle(0.25)` holds 25% throttle throughout a leg. Starting at zero
 would leave a stationary boat at zero forever. Explicit `launch_throttle=0.05`
 provides a 5% minimum on the first leg until its profile reaches 5%. There is no
-implicit launch default. Constant-throttle paths do not need launch assistance.
+implicit launch default. Internal profile knots are reached before switching
+legs, so the final arrival tolerance does not truncate an intermediate peak.
+Constant-throttle paths do not need launch assistance.
 Zero throttle means neutral, not active braking or position holding. Arrival uses
 `arrival_radius_m` (default 1 m); the final action is neutral. A live path starts
 only if the boat is already within that radius of the first waypoint.
@@ -297,19 +357,30 @@ mode transitions, restores MANUAL and optionally aligns the arrival heading with
 bounded differential thrust. Simulation travels through the same geometry and
 preserves pose. Home transfer data is included in the enclosing recording.
 
-A folder-level `batch.json` containing `home`, `heading_deg`, and `speed_mps`
-enables initial home setup and post-success return for that folder's cases. The
-bundled maneuvers define a northern west–east safe corridor there. Existing UI
-controls are unchanged. Return paths must themselves be valid; this feature does
-not add obstacle-aware route planning around exclusions.
+The runner manages process lifetime, readiness, recording, sequential execution
+and safety cleanup. It never invokes `navigate()`, chooses a destination or
+inserts a return movement. Controller code owns every movement:
 
+```python
+def run(mc):
+    mc.navigate(START, speed_mps=1, heading_deg=90)
+    mc.run("my-path", plan).wait_until_finished()
+    mc.navigate(START, speed_mps=1, heading_deg=90)
+```
 
-When a folder's `batch.json` contains both `home` and `end`, the runner ensures the
-end waypoint is reached before returning home. Straight experiment scripts use
-`mc.run()` with an actual home-to-end plan. Files default to a distinct AUTO transfer to `end` when needed, followed by home.
-A file may declare `VISIT_END = False` to return directly home; the bundled circle
-and spin experiments do this.
-Transfer phases are recorded separately from the experiment's input sequence.
+The numbered experiments import coordinates and numeric settings from
+`experiments/corridor.json` through `_common.py`; that module defines no movement
+helpers. Each experiment contains its own positioning and return commands.
+Acceleration and straight cases reach END through their explicit thrust plans.
+Zigzag explicitly navigates to END after its timed maneuver and then returns to
+START. Turns and spin explicitly return directly to START. `batch.json` and
+`VISIT_END` have no control meaning in the runner.
+
+The SDK waits for a previous release's neutral transmission window before
+acquiring the next scope, starting a path or accepting a navigation request.
+This is safety synchronization; it does not issue movement commands. If an
+experiment fails, its subsequent return call is not executed; runner cleanup
+releases control and preserves the failed recording.
 
 For individual files, pass that file instead of the directory. `--only NAME`
 selects a named function from its `EXPERIMENTS` mapping and can be repeated.
@@ -317,9 +388,9 @@ selects a named function from its `EXPERIMENTS` mapping and can be repeated.
 `--mode live --no-gps` is an explicit motor-testing mode. It disables geographic
 protection and all waypoint/AUTO navigation, keeps heartbeat/arming/MANUAL/mapping
 checks, and limits each control scope to 60 seconds. The backend refuses navigation
-APIs in this mode. `mc.testing_without_gps` lets a script select a finite input-only
-variant. The bundled acceleration and straight cases supply these variants. The
-runner skips all configured east/home transfers, and logs mark the GPS bypass.
+APIs in this mode. `mc.testing_without_gps` lets a custom motor-test script select a finite raw-input
+variant. The numbered movement experiments require feedback and are rejected in
+this mode; they do not provide raw-throttle substitutes. Logs mark the GPS bypass.
 No firmware arming checks or failsafe parameters are changed.
 
 
