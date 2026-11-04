@@ -87,6 +87,54 @@ class LiveMissionControlTests(unittest.TestCase):
         self.assertTrue(controller.status_is_error)
         self.assertIn("unconfirmed", controller.last_status_msg)
 
+    def test_kill_switch_sends_repeated_neutral_in_manual_and_auto(self):
+        for mode in ("MANUAL", "AUTO"):
+            with self.subTest(mode=mode):
+                controller = self.controller()
+                wire = io.BytesIO()
+                controller.master.mav = mavutil.mavlink.MAVLink(wire)
+                controller.master.mode_mapping = lambda: {"MANUAL": 0, "AUTO": 10}
+                controller.mode_str = mode
+                controller.mission_started = mode == "AUTO"
+                controller._control_parameters = {"RC1_TRIM": (1490, 0), "RC3_TRIM": (1510, 0)}
+                controller.emergency_stop()
+                deadline = time.monotonic() + 2
+                while controller._stop_in_progress and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertFalse(controller._stop_in_progress)
+                self.assertTrue(controller.emergency_stopped)
+                self.assertFalse(controller.mission_started)
+                self.assertFalse(controller.send_manual_control(600, 200))
+                self.assertFalse(controller.set_mode("AUTO"))
+                self.assertFalse(controller.set_arm(True))
+                decoded = mavutil.mavlink.MAVLink(None).parse_buffer(wire.getvalue())
+                modes = [m for m in decoded if m.get_type() == "SET_MODE"]
+                manual = [m for m in decoded if m.get_type() == "MANUAL_CONTROL"]
+                rc = [m for m in decoded if m.get_type() == "RC_CHANNELS_OVERRIDE"]
+                self.assertEqual(len(modes), 5)
+                self.assertTrue(all(m.custom_mode == 0 for m in modes))
+                self.assertEqual(len(manual), 5)
+                self.assertTrue(all((m.x, m.r) == (0, 0) for m in manual))
+                self.assertEqual(len(rc), 5)
+                self.assertTrue(all((m.chan1_raw, m.chan3_raw) == (1490, 1510) for m in rc))
+
+    def test_kill_switch_prevents_pending_mission_start(self):
+        controller = self.controller()
+        controller.master.mode_mapping = lambda: {"MANUAL": 0, "AUTO": 10}
+        def stop_during_upload():
+            controller.emergency_stop()
+            return True
+        controller.mission_uploaded = False
+        with patch.object(controller, "upload_mission", side_effect=stop_during_upload), \
+             patch.object(controller.transport, "send") as send:
+            controller._start_mission_worker()
+            deadline = time.monotonic() + 2
+            while controller._stop_in_progress and time.monotonic() < deadline:
+                time.sleep(.01)
+        self.assertFalse(controller.mission_started)
+        self.assertFalse(any(call.args[0] == "command_long" for call in send.call_args_list))
+        self.assertFalse(any(call.args[0] == "set_mode" and call.args[-1] == 10 for call in send.call_args_list))
+
     def test_vehicle_warning_is_exposed_to_operator(self):
         controller = self.controller()
         message = SimpleNamespace(get_type=lambda: "STATUSTEXT", text=b"GCS Failsafe\x00", severity=4)

@@ -148,6 +148,7 @@ class ControllerRuntime:
             first, last = (waypoints[0], waypoints[-1]) if waypoints else ({}, {})
             snapshot = {
                 "connected": c.connected, "armed": c.is_armed, "mode": c.mode_str,
+                "emergency_stopped": c.emergency_stopped,
                 "vehicle_confirmed": {"armed": c._confirmed_armed, "mode": c._confirmed_mode},
                 "lat": c.lat, "lon": c.lon, "alt": c.alt, "heading": c.heading,
                 "speed": c.groundspeed, "satellites": c.satellites, "fix": c.fix_type,
@@ -188,6 +189,15 @@ class ControllerRuntime:
             if self._closing:
                 raise ValueError("Ground station is shutting down")
             c, s = self.controller, self.session
+            if c.emergency_stopped and (action in {"arm", "manual", "upload", "start"} or
+                    action == "manual_active" and data.get("active") is True):
+                raise ValueError("Kill switch is engaged; reset it before driving")
+            if action == "reset_stop":
+                if c.is_starting_mission or c.is_uploading_mission or c._stop_in_progress:
+                    raise ValueError("Wait for mission and stop workers to finish before resetting")
+                c.emergency_stopped = False
+                c.set_status_msg("[SAFETY] Kill switch reset. Controls remain idle until explicitly enabled.")
+                return {"ok": True}
             if action == "sdk":
                 try:
                     return self.programmatic.command(data.get("operation"), data)
@@ -195,7 +205,14 @@ class ControllerRuntime:
                     raise ValueError(f"Invalid SDK request: {exc}") from exc
             if getattr(self,"testing_without_gps",False) and action in {"upload","start"}:
                 raise ValueError("Waypoint missions are disabled in no-GPS motor test mode")
-            if action in {"stop", "manual", "arm", "disarm", "upload", "start", "calibrate_joystick"} or (action == "manual_active" and data.get("active") is True):
+            if action == "stop":
+                # Latch before revoking SDK ownership or waiting on neutral output.
+                c.emergency_stop()
+                self._manual_active = False
+                s.manual.zero(send_neutral=False)
+                self.programmatic.takeover("Operator kill switch")
+                return {"ok": True}
+            if action in {"manual", "arm", "disarm", "upload", "start", "calibrate_joystick"} or (action == "manual_active" and data.get("active") is True):
                 self.programmatic.takeover("Operator command: " + action)
             if self.programmatic.busy and action in {"clear", "close_loop", "add_waypoint", "move_waypoint", "remove_waypoint", "load", "padding", "mission_speed"}:
                 raise ValueError("Release SDK control before changing the route or operating area")
@@ -216,9 +233,6 @@ class ControllerRuntime:
                 self._manual_active = data["active"] and c.mode_str == "MANUAL"
                 if not self._manual_active:
                     s.manual.zero()
-            elif action == "stop":
-                self._manual_active = False
-                s.emergency_stop()
             elif action == "arm":
                 s.arm()
             elif action == "disarm":

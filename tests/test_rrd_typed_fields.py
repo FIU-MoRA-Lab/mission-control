@@ -9,12 +9,31 @@ from rerun.chunk import RrdReader
 from backend.logger.records import input_record, mavlink_record, restore_nonfinite
 from backend.logger.rrd_logger import RrdLogger
 from backend.logger.jsonl_logger import JsonlLogger
+from backend.control.recording import control_record
 from backend.logger.mcap_logger import McapLogger
 from pymavlink.dialects.v20 import ardupilotmega as mavlink
 from mcap.reader import make_reader
 
 
 class TypedRecordingTests(unittest.TestCase):
+    def test_control_heading_remains_float64_for_integer_telemetry_samples(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            writer = RrdLogger(Path(tmp)/"control")
+            writer.open()
+            for heading in (0.0,255,255.45,256):
+                writer.write(control_record({'event':'control_state','heading':heading}))
+            writer.close()
+            values = []
+            for chunk in RrdReader(writer.output_path).stream():
+                if chunk.entity_path != '/input/CONTROL/heading':
+                    continue
+                batch = chunk.to_record_batch()
+                if 'value' in batch.schema.names:
+                    column = batch.column('value')
+                    self.assertEqual(column.type.value_type,pa.float64())
+                    values.extend(row[0] for row in column.to_pylist())
+            self.assertEqual(values,[0.0,255.0,255.45,256.0])
+
     def test_joystick_direction_changes_keep_one_signed_type(self):
         with tempfile.TemporaryDirectory() as tmp:
             writer = RrdLogger(Path(tmp) / "joystick")

@@ -33,9 +33,12 @@ Run a folder of Python experiments sequentially with one automatically managed
 backend and separate logs per run:
 
 ```bash
-uv run mission-control run experiments/ --mode simulation
-uv run mission-control run experiments/ --mode simulation --ui
+uv run mission-control run experiments/motion/ --mode simulation
+uv run mission-control run experiments/motion/ --mode simulation --ui
 ```
+
+Motion cases live in `experiments/motion/`. For independent timed left/right
+thruster tests, see [experiments/testing](experiments/testing/README.md).
 
 Each file exports `run(mc)` or an ordered `EXPERIMENTS` mapping. The existing UI is
 optional; the batch stops on failure and neutralizes controls between runs.

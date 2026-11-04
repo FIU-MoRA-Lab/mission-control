@@ -67,6 +67,8 @@ class VehicleController:
         self.is_starting_mission = False
         self.mission_started = False
         self.simulating_mission = False
+        self.emergency_stopped = False
+        self._stop_in_progress = False
         self._sim_thread = None
 
         # Status notification feedback for UI
@@ -116,24 +118,29 @@ class VehicleController:
 
     def emergency_stop(self):
         """Immediately aborts autonomous mission, sets MANUAL mode, and zeroes thrusters."""
-        self.simulating_mission = False
-        self.set_status_msg("[SAFETY] EMERGENCY STOP requested; sending neutral controls.", error=True)
-        if not self.master or not self.connected:
-            self.mode_str = "MANUAL"
-            self.set_status_msg("[SAFETY] No active vehicle link; neutral controls could not be sent.", error=True)
-            return
+        with self._mav_send_lock:
+            self.emergency_stopped = True
+            self.simulating_mission = False
+            self.mission_started = False
+            if self._stop_in_progress:
+                return
+            self._stop_in_progress = True
+        self.set_status_msg("[SAFETY] KILL SWITCH engaged; sending MANUAL and neutral controls.", error=True)
 
-        # Keep MAVLink writes and the short neutral burst off the GUI thread.
         def stop_worker():
-            mode_set = self.set_mode("MANUAL")
-            for _ in range(5):
-                self.send_manual_control(0, 0)
-                time.sleep(0.02)
-            if not mode_set:
-                self.set_status_msg(
-                    "[SAFETY] Neutral controls sent, but MANUAL mode could not be selected.",
-                    error=True,
-                )
+            try:
+                if not self.master or not self.connected:
+                    self.mode_str = "MANUAL"
+                    self.set_status_msg("[SAFETY] Kill switch engaged. No vehicle link; stop delivery unavailable.", error=True)
+                    return
+                # Retry the mode request as well as neutral output. Transmission is
+                # not acknowledgement; heartbeat telemetry remains the authority.
+                for _ in range(5):
+                    self.set_mode("MANUAL")
+                    self.send_manual_control(0, 0)
+                    time.sleep(0.05)
+            finally:
+                self._stop_in_progress = False
         threading.Thread(target=stop_worker, name="heron-emergency-stop", daemon=True).start()
 
     def check_vehicle_link(self, now=None):
@@ -157,6 +164,9 @@ class VehicleController:
             roll_input, throttle_input = round(left / scale), round(right / scale)
         pwm_steer = int(1500 + roll_input * 0.5)
         pwm_throttle = int(1500 + throttle_input * 0.5)
+        if not throttle and not yaw:
+            pwm_steer = round(self._control_parameters.get("RC1_TRIM", (1500,))[0])
+            pwm_throttle = round(self._control_parameters.get("RC3_TRIM", (1500,))[0])
         output = {"time": time.monotonic(), "throttle": throttle, "yaw": yaw,
                                  "chan1_raw": pwm_steer, "chan3_raw": pwm_throttle,
                                  "sent": False, "error": "Vehicle link unavailable"}
@@ -165,11 +175,11 @@ class VehicleController:
             sys_id = master.target_system if getattr(master, 'target_system', 0) > 0 else 1
             try:
                 with self._mav_send_lock:
-                    if not self.running and (throttle or yaw):
-                        output["error"] = "Ground station is shutting down"
+                    if (not self.running or self.emergency_stopped) and (throttle or yaw):
+                        output["error"] = "Kill switch is engaged" if self.emergency_stopped else "Ground station is shutting down"
                         self.last_manual_send = output
                         return False
-                    self.transport.send("manual_control", sys_id, throttle_input, 0, 0, roll_input, 0)
+                    self.transport.send("manual_control", sys_id, 0, roll_input, throttle_input, 0, 0)
                     # Use the same target component selected by the legacy TUI
                     # after its heartbeat. Some vehicle bridges do not route
                     # component-0 RC overrides to the autopilot.
@@ -192,6 +202,8 @@ class VehicleController:
         if not self.running:
             return False
         mode_name = mode_name.upper()
+        if self.emergency_stopped and mode_name != "MANUAL":
+            return False
         if not self.master or not self.connected:
             self.mode_str = mode_name
             self.log(f"[GCS] Set simulated mode to {mode_name}")
@@ -229,7 +241,7 @@ class VehicleController:
         sys_id = self.master.target_system if getattr(self.master, 'target_system', 0) > 0 else 1
         try:
             with self._mav_send_lock:
-                if not self.running:
+                if not self.running or self.emergency_stopped and mode_name != "MANUAL":
                     return False
                 self.transport.send("set_mode", 
                     sys_id,
@@ -245,11 +257,11 @@ class VehicleController:
 
     def set_arm(self, arm: bool) -> bool:
         """Arm or Disarm vehicle motors."""
-        if not self.running:
+        if not self.running or arm and self.emergency_stopped:
             return False
         if not self.master or not self.connected:
             with self._mav_send_lock:
-                if not self.running:
+                if not self.running or arm and self.emergency_stopped:
                     return False
                 self.is_armed = arm
             self.set_status_msg(f"[GCS] Vehicle {'ARMED' if arm else 'DISARMED'} (Simulated)", error=False)
@@ -260,10 +272,10 @@ class VehicleController:
         comp_id = 0
         cmd = mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM
         param1 = 1.0 if arm else 0.0
-        param2 = 21196.0 if arm else 0.0
+        param2 = 0.0  # Normal arming: retain autopilot pre-arm checks.
         try:
             with self._mav_send_lock:
-                if not self.running:
+                if not self.running or arm and self.emergency_stopped:
                     return False
                 self.transport.send("command_long", 
                     sys_id, comp_id, cmd, 0, param1, param2, 0, 0, 0, 0, 0
@@ -347,6 +359,8 @@ class VehicleController:
                     "[MAVLink] Mission start unconfirmed: waiting for vehicle AUTO, armed state, "
                     "and active waypoint telemetry. Check vehicle warnings and GPS/EKF status.", error=True)
                 return
+            if self.emergency_stopped:
+                return
             self.mission_started = True
             self.set_status_msg("[MAVLink] Mission started: vehicle confirmed AUTO, armed, and an active waypoint.", error=False)
         except Exception as exc:
@@ -356,7 +370,7 @@ class VehicleController:
 
     def _wait_for_mission_start(self, selected_at, timeout=8.0):
         deadline = time.monotonic() + timeout
-        while self.running and self.check_vehicle_link():
+        while self.running and not self.emergency_stopped and self.check_vehicle_link():
             if (self._confirmed_mode == "AUTO" and self._confirmed_armed
                     and self._mission_current_at >= selected_at
                     and self._mission_current_seq is not None and self._mission_current_seq >= 2):
@@ -528,7 +542,7 @@ class VehicleController:
     def start_simulated_mission(self, wps: list[dict]):
         """Spawns background simulation loop to step vehicle through waypoints when disconnected."""
         with self._mav_send_lock:
-            if not self.running:
+            if not self.running or self.emergency_stopped:
                 return
             self.simulating_mission = True
             self.mission_started = True

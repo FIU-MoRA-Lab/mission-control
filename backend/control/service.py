@@ -18,7 +18,7 @@ from .adapter import Adapter, PARAMETERS
 from .navigation import RouteFollower
 from .planning import Plan, Waypoint, number
 from .recording import RunRecording
-from .profile import InputProfile
+from .profile import InputProfile, InputPulse
 from .motion import Motion
 from .auto import AutoTransfer
 from .storage import RunStore, save_json, stamp
@@ -64,7 +64,34 @@ class ControlService:
     def state(self):
         return {"testing_without_gps":self.no_gps,"neutralizing": time.monotonic() < self._neutral_until,
                 "control":dict(self.owner) if self.owner else self.last,
+                "execution": self.execution_state(),
                 "recording":dict(self.manifest) if self.manifest else None}
+
+    def execution_state(self):
+        """Current task progress; open-ended controls deliberately have no percentage."""
+        if not self.owner:
+            return None
+        now = time.monotonic()
+        elapsed = max(0, now - self._started)
+        label, fraction = "Direct control", None
+        if self.navigator:
+            label = "AUTO transfer · " + self.navigator.phase.replace("_", " ")
+        elif self.motion:
+            label = self.motion.operation.replace("_", " ").capitalize()
+            if self.motion.operation == "move":
+                fraction = (now - self.motion_started) / self.motion.duration
+        elif self.profile:
+            label = "Input profile"
+            fraction = (now - self.profile_started) / self.profile.duration
+        elif self.follower:
+            count = len(self.follower.plan.legs)
+            leg = self.follower.leg
+            label = f"Route · leg {leg + 1}/{count}"
+            fraction = (leg + self.owner.get("progress", 0)) / count
+        elif self.owner.get("motion_status") == "completed":
+            label, fraction = "Maneuver complete · awaiting code", 1.0
+        return {"label": label, "elapsed_s": elapsed, "mode": self.owner["mode"],
+                "fraction": max(0, min(1, fraction)) if fraction is not None else None}
 
     def _write(self, data):
         if self.recording and self.manifest["status"] != "finishing":
@@ -80,6 +107,8 @@ class ControlService:
         if self.owner or self._neutral_until > time.monotonic():
             raise ValueError("Another controller owns the vehicle or is neutralizing")
         c = self.runtime.controller
+        if c.emergency_stopped:
+            raise ValueError("Kill switch is engaged; reset it in Mission Control before driving")
         if c.mission_started or c.is_starting_mission or c.is_uploading_mission or c.simulating_mission:
             raise ValueError("Stop the current mission before acquiring SDK control")
         mode = data.get("mode","simulation")
@@ -105,8 +134,6 @@ class ControlService:
         adapter = Adapter(c,mode,position,heading)
         adapter.testing_without_gps = self.no_gps
         position,_,_ = adapter.state()
-        if mode == "live":
-            adapter.parameters(kind)
         if not self.no_gps and area.segment_issue(position,position):
             raise ValueError("Control must start inside the lake with configured clearance; select a start point on the map")
         self.runtime._manual_active = False
@@ -183,6 +210,24 @@ class ControlService:
             self.owner["motion_status"] = status
             self.motion = None
 
+    def pulse(self, data):
+        self.require(data.get("id"))
+        if self._execution or self.navigator:
+            raise ValueError("Another motion executor is active")
+        keys = ("throttle","steering") if self.owner["kind"] == "axes" else ("left","right")
+        profile = InputPulse(data["duration_s"],data["target"],keys)
+        if self.no_gps and profile.duration >= 60:
+            raise ValueError("No-GPS test pulses must be less than 60 seconds")
+        self._clear_motion()
+        self.profile = profile
+        self.profile_started = time.monotonic()
+        self.follower = None
+        self.owner.update(profile_id=uuid4().hex,profile_complete=False)
+        self._lease = self.profile_started+profile.duration+2
+        self._write({"event":"input_pulse","id":self.owner["id"],
+                     "duration_s":profile.duration, **profile.target})
+        return {"profile_id":self.owner["profile_id"]}
+
     def movement(self, operation, data):
         self.require(data.get("id"))
         if self.no_gps:
@@ -216,7 +261,11 @@ class ControlService:
             raise ValueError("Movement requires fresh, finite ground-speed feedback")
 
     def stop_movement(self, data):
+        if data.get("profile_id") is not None and (not self.owner or self.owner["id"] != data.get("id")):
+            return {"ok":True}
         self.require(data.get("id"))
+        if data.get("profile_id") is not None and data["profile_id"] != self.owner.get("profile_id"):
+            return {"ok":True}
         if data.get("motion_id") is not None and (data["motion_id"] != self.owner.get("motion_id")
                                                    or self.owner.get("motion_status") != "active"):
             return {"ok":True}
@@ -490,6 +539,7 @@ class ControlService:
         if self.store is None:
             self.store = RunStore()
         manifest = dict(id=run_id,name=name,directory=str(directory),recording=str(directory/"recording.mcap"),
+                        rrd_recording=str(directory/"recording.rrd"),
                         status="recording",started_at=stamp(),ended_at=None,reason="",metadata=metadata,
                         area_revision=area.revision,testing_without_gps=self.no_gps,geofence_enabled=not self.no_gps,mode=self.owner["mode"] if self.owner else "observe",owner_pid=os.getpid())
         self.store.save(manifest)
@@ -543,9 +593,31 @@ class ControlService:
         return self._routes
 
     def command(self, operation, data):
+        if operation == "vehicle_action":
+            action = data.get("command")
+            if action not in {"set_manual", "arm", "disarm"}:
+                raise ValueError("Choose set_manual, arm or disarm")
+            if getattr(self.runtime, "execution_mode", None) == "simulation":
+                raise ValueError("Live vehicle actions are unavailable in simulation")
+            c = self.runtime.controller
+            if not c.master or c._last_vehicle_heartbeat is None or not c.check_vehicle_link():
+                raise ValueError("Vehicle action requires a fresh vehicle connection")
+            if c.emergency_stopped and action != "disarm":
+                raise ValueError("Kill switch is engaged; reset it before driving")
+            self.takeover("SDK vehicle action: " + action)
+            self.runtime._manual_active = False
+            self.runtime.session.manual.zero(send_neutral=False)
+            if action == "arm" and c._confirmed_mode != "MANUAL":
+                raise ValueError("Select and confirm MANUAL before arming")
+            Adapter(c,"live",Waypoint(0,0),0).neutral()
+            sent = c.set_mode("MANUAL") if action == "set_manual" else c.set_arm(action == "arm")
+            if not sent:
+                raise ValueError("Vehicle action could not be sent: " + action)
+            return {"sent":True}
         if operation == "acquire": return self.acquire(data)
         if operation == "set": return self.set_target(data)
         if operation == "play": return self.play(data)
+        if operation == "pulse": return self.pulse(data)
         if operation in {"move", "turn_to", "go_to"}: return self.movement(operation, data)
         if operation == "control_stop": return self.stop_movement(data)
         if operation == "navigate": return self.navigate(data)
@@ -570,7 +642,10 @@ class ControlService:
             c = self.runtime.controller
             if data.get("request"):
                 if not c.master or not c.connected: raise ValueError("Vehicle is disconnected")
-                for key in PARAMETERS:
+                names = data.get("names", list(PARAMETERS))
+                if not isinstance(names, list) or not names or any(key not in PARAMETERS for key in names):
+                    raise ValueError("Choose known control parameter names")
+                for key in names:
                     c._control_parameters.pop(key,None)
                     c.transport.send("param_request_read",c.master.target_system,c.autopilot_component or 1,key.encode(),-1)
             return {key:value for key,(value,received) in c._control_parameters.items() if time.monotonic()-received <= 60}

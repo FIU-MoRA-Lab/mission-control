@@ -158,8 +158,6 @@ def execute(entries, mc, directory):
                     result.update(id=run.id,directory=str(run.directory))
                     (run.directory/"source.py").write_bytes(source)
                     try:
-                        if mc.default_mode == "live":
-                            mc.read_parameters()
                         returned = entry.function(mc)
                         if inspect.isawaitable(returned):
                             if inspect.iscoroutine(returned): returned.close()
@@ -206,19 +204,23 @@ def live_blockers(state, no_gps=False):
     return blockers
 
 
-def wait_for_vehicle(mc,timeout,report=None,no_gps=False):
-    print("Waiting for vehicle connection, MANUAL mode and arming. No parameters or modes are changed automatically.",flush=True)
+def wait_for_vehicle(mc,timeout,report=None,no_gps=False,require_control=True):
+    print("Waiting for vehicle connection" + (", MANUAL mode and arming." if require_control else
+          "; experiment code selects MANUAL and requests arming explicitly."),flush=True)
     deadline = time.monotonic()+timeout
     previous = None
     while time.monotonic() < deadline:
         state = mc.state()
         blockers = live_blockers(state,no_gps=no_gps)
+        if not require_control:
+            blockers = [issue for issue in blockers if issue == "vehicle disconnected" or
+                        issue.startswith("GPS fix") or issue == "vehicle position unavailable"]
         if blockers != previous:
-            print("Live startup: " + ("; ".join(blockers) if blockers else "vehicle ready; verifying parameters"),flush=True)
+            ready = "vehicle ready" if require_control else "connection ready; starting experiment setup"
+            print("Live startup: " + ("; ".join(blockers) if blockers else ready),flush=True)
             if report: report(state,blockers)
             previous = blockers
         if not blockers:
-            mc.read_parameters()
             return
         time.sleep(.2)
     raise TimeoutError("Vehicle not ready: " + "; ".join(previous or ["startup timeout"]))
@@ -276,7 +278,7 @@ def main(argv=None):
                             "confirmed":state.get("vehicle_confirmed"),
                             "vehicle":{key:state.get(key) for key in ("connected","mode","armed","fix","satellites","lat","lon")},
                         })
-                    wait_for_vehicle(mc,args.startup_timeout,report=report,no_gps=args.no_gps)
+                    wait_for_vehicle(mc,args.startup_timeout,report=report,no_gps=args.no_gps,require_control=False)
                 execute(entries,mc,directory)
             except Exception as exc:
                 if ui and ui.poll() is None:

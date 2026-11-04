@@ -129,11 +129,16 @@ def run(mc):
                 owners.add(manifest['owner_pid'])
                 self.assertEqual(manifest['status'],'completed')
                 self.assertTrue((run/'source.py').exists())
+                self.assertEqual(manifest['rrd_recording'],str(run/'recording.rrd'))
+                from rerun.chunk import RrdReader
+                entities = {chunk.entity_path for chunk in RrdReader(run/'recording.rrd').stream()}
+                self.assertIn('/input/CONTROL/event',entities)
                 with (run/'recording.mcap').open('rb') as stream:
                     self.assertGreater(len(list(make_reader(stream,validate_crcs=True).iter_messages())),2)
             self.assertEqual(len(owners),1)
             self.assertFalse((directory/'connection.json').exists())
             self.assertEqual(len(list((directory/'session').rglob('*.mcap'))),1)
+            self.assertEqual(len(list((directory/'session').rglob('*.rrd'))),1)
             self.assertFalse((Path(tmp)/'data/logs').exists())
 
     def test_navigation_only_occurs_when_explicitly_requested_by_experiment(self):
@@ -201,6 +206,10 @@ def run(mc):
             self.assertTrue(ended)
             self.assertEqual(ended[-1]['throttle'],0)
             self.assertIn('intentional failure',(directory/'failure.txt').read_text())
+            from rerun.chunk import RrdReader
+            self.assertTrue(any(chunk.entity_path == '/input/CONTROL/event'
+                                for chunk in RrdReader(run/'recording.rrd').stream()))
+            self.assertEqual(len(list((directory/'session').rglob('*.rrd'))),1)
             self.assertFalse((directory/'connection.json').exists())
 
     def test_viewer_can_attach_and_detach_without_owning_backend(self):

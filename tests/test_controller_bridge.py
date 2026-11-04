@@ -336,8 +336,10 @@ class BackendProcessTests(unittest.TestCase):
                 with logs[0].open('rb') as stream:
                     reader = make_reader(stream, validate_crcs=True)
                     messages = list(reader.iter_messages())
-                    # Local input status can be recorded even with no vehicle packets.
-                    self.assertTrue(all(channel.topic == '/input/JOYSTICK' for _, channel, _ in messages))
+                    # Idle GCS heartbeats and local input status are recorded
+                    # without a vehicle; no drive commands should be emitted.
+                    self.assertTrue(all(channel.topic in {'/input/JOYSTICK', '/commands/HEARTBEAT'}
+                                        for _, channel, _ in messages))
                     self.assertEqual(reader.get_summary().statistics.message_count, len(messages))
                 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp:
                     udp.bind(('127.0.0.1', port))

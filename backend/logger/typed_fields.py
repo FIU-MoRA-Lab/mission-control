@@ -7,6 +7,11 @@ from backend.rerun.paths import field_path
 
 MESSAGES = {message.msgname: message for message in mavlink.mavlink_map.values()}
 TYPES = {"char": pa.string(), "float": pa.float32(), "double": pa.float64()}
+# Local control telemetry has no MAVLink field schema. Physical quantities must
+# not switch Arrow types when telemetry reports an integer-valued sample.
+CONTROL_FLOAT_FIELDS = {"lat", "lon", "heading", "speed", "requested_throttle",
+                        "throttle", "steering", "left", "right", "target_speed_mps",
+                        "target_heading_deg"}
 for width in (8, 16, 32, 64):
     TYPES[f"int{width}_t"] = getattr(pa, f"int{width}")()
     TYPES[f"uint{width}_t"] = getattr(pa, f"uint{width}")()
@@ -18,6 +23,8 @@ def log_decoded_fields(stream, topic, message_type, data, *, schemas=None):
         path = field_path(topic, name)
         protocol_type = None
         arrow_type = None
+        if message_type == "CONTROL" and name in CONTROL_FLOAT_FIELDS:
+            arrow_type = pa.float64()
         if message and name in message.fieldnames:
             protocol_type = message.fieldtypes[message.fieldnames.index(name)]
             arrow_type = TYPES[protocol_type]

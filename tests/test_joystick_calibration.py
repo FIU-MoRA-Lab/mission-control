@@ -84,7 +84,7 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(calibration.centers, [0] * 4)
 
     def test_command_pauses_controls_and_requires_explicit_reenable(self):
-        backend = ControllerRuntime(Mock(), Mock(), inputs=False)
+        backend = ControllerRuntime(Mock(emergency_stopped=False), Mock(), inputs=False)
         backend.gamepad = JoystickReader(queue.Queue())
         backend.controller.mode_str = 'MANUAL'
         backend._publish_live_joystick(0, 0, 'GAMEPAD')
@@ -102,7 +102,7 @@ class CalibrationTests(unittest.TestCase):
         self.assertTrue(backend._manual_active)
 
     def test_command_requires_connected_reader(self):
-        backend = ControllerRuntime(Mock(), Mock(), inputs=False)
+        backend = ControllerRuntime(Mock(emergency_stopped=False), Mock(), inputs=False)
         with self.assertRaisesRegex(ValueError, 'Connect a joystick'):
             backend.command('calibrate_joystick', {})
 

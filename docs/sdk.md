@@ -4,8 +4,8 @@ The synchronous SDK uses the existing backend and UI. Batch execution starts its
 own backend automatically; no separate app startup or connection file is needed.
 
 ```bash
-uv run mission-control run experiments/ --mode simulation
-uv run mission-control run experiments/ --mode simulation --ui
+uv run mission-control run experiments/motion/ --mode simulation
+uv run mission-control run experiments/motion/ --mode simulation --ui
 ```
 
 The second command attaches the existing UI for live monitoring. Closing that UI
@@ -16,10 +16,13 @@ The layout and controls are unchanged.
 Run one file, choose a log root, or list the order without starting a backend:
 
 ```bash
-uv run mission-control run experiments/02_straight_runs.py --mode simulation
-uv run mission-control run experiments/ --output-dir ./logs/batches
-uv run mission-control run experiments/ --list
+uv run mission-control run experiments/motion/02_straight_runs.py --mode simulation
+uv run mission-control run experiments/motion/ --output-dir ./logs/batches
+uv run mission-control run experiments/motion/ --list
 ```
+
+Use `experiments/testing/` for [independent timed thruster tests](../experiments/testing/README.md).
+Choose a subfolder to run only that suite; `experiments/` recursively includes both.
 
 Each file defines an ordinary synchronous function:
 
@@ -62,7 +65,7 @@ Each batch writes `results.json`, `backend.log`, and separate run directories
 under `logs/batches/<UTC timestamp + unique suffix>/` (or the configured log
 root). The backend session recordings are kept in that batch's `session/`
 subfolder; experiment recordings remain under its `runs/` subfolder. Every run includes its source
-file and SHA-256 hash, metadata, area snapshot, MCAP/JSONL logs and any path
+file and SHA-256 hash, metadata, area snapshot, MCAP/JSONL/RRD logs and any path
 snapshots. Failure or Ctrl+C preserves partial recordings and stops the batch;
 there is no automatic continue-on-failure. The runner never issues navigation
 commands or reads movement policy from a configuration file. Initial positioning,
@@ -74,9 +77,13 @@ endpoint visits and return movements must be explicit in each experiment.
 uv run mission-control run my_experiments/ --mode live --ui --connection udpin:0.0.0.0:14550
 ```
 
-The runner waits for connection, MANUAL mode and arming, then reads parameters.
-Use the existing UI or your vehicle's operator controls to establish that state.
-The runner does not change configuration, modes or arming. `mc.control()` and
+The runner waits for connection and, unless `--no-gps` is selected, GPS readiness.
+Each bundled experiment uses `with mc.armed_manual():` to select MANUAL, arm,
+run its work, and request disarming on exit. Live execution requests arming when
+that scope starts; it does not wait for prior UI arming. Setup waits for vehicle
+heartbeat confirmation. Simulation sends no vehicle actions. Errors propagate;
+if both the experiment and disarming fail, both errors are reported together.
+The runner itself does not select modes or arm. `mc.control()` and
 `mc.run()` inherit the selected batch mode; a batch backend rejects a conflicting
 mode requested by a script. Repositioning and mapping changes must be explicit
 in the experiment code. The numbered acceleration/straight experiments use position-based thrust paths;
@@ -85,7 +92,7 @@ still need to match the vehicle as described below.
 
 For ad hoc scripts that attach to an already running app, start
 `uv run mission-control --demo` first, then use `MissionControl.connect()` as
-shown below. The numbered scripts in `experiments/` are the runnable examples.
+shown below. The numbered scripts in `experiments/motion/` are the runnable examples.
 
 ```python
 from backend.sdk import MissionControl
@@ -180,6 +187,35 @@ Nothing automatically keeps an old nonzero command alive if your algorithm stall
 A control scope with no command expires after two seconds.
 
 ```python
+mc.run_thruster("left", throttle_pct=20, duration_s=3)   # Right stays neutral.
+mc.run_thruster("right", throttle_pct=20, duration_s=3)  # Left stays neutral.
+mc.run_thrusters(left_throttle_pct=30, right_throttle_pct=-20, duration_s=5)
+```
+
+`mc.run_thruster()` and `mc.run_thrusters()` validate inputs, acquire control in
+the client's selected mode, maintain inputs for the duration, then request neutral
+and release control. Both calls block until finished. `throttle_pct` ranges from
+-100 (full reverse) to 100 (full forward); zero is neutral. It means requested
+input percentage, not measured electrical power, thrust or speed. The
+single-thruster call keeps the other side neutral; the dual call requires both
+`left_throttle_pct` and `right_throttle_pct`. Lower-level `Control.set()` and
+`hold()` continue to use normalized inputs in [-1, 1]. Live `control()` scopes
+send raw normalized MAVLink input without fetching RC calibration or converting
+through min/trim/max, reversal or dead zones. They do not send RC PWM overrides.
+Timed thruster calls use `Control.pulse()`: a finite constant target evaluated
+and transmitted by the backend. They do not depend on the client's 250 ms
+`set()` refresh lease. At the deadline the backend requests neutral, even if
+client polling stalls or disconnects. Stop/disarm, link loss and the existing
+vehicle checks can abort a pulse early. This is a bounded timed command, not a
+guarantee of measured motor response. Lower-level `hold()` remains a client
+set/sleep loop with short command expiry.
+Use `start=Waypoint(...)` to initialize simulation, or `mode="live"` to explicitly
+select live control. In no-GPS mode, each call must be shorter than 60 seconds.
+See the [minimal thruster experiment](../experiments/testing/01_thrusters.py).
+
+For lower-level control within a scope:
+
+```python
 with mc.control(kind="thrusters", start=start) as control:
     control.hold(3, left=0.2, right=-0.2)
 
@@ -196,37 +232,44 @@ supplied by the caller. No perception framework is imposed.
 **Live execution is explicit:**
 
 ```python
-mc.read_parameters()
-with mc.control(mode="live", kind="axes") as control:
-    control.hold(2, throttle=0.2, steering=0.0)
-
-# Or, for a verified two-paddle configuration:
-with mc.control(mode="live", kind="thrusters") as control:
-    control.hold(2, left=0.2, right=-0.2)
+with MissionControl.connect(mode="live") as mc:
+    with mc.armed_manual(timeout_s=10):
+        mc.run_thruster("left", throttle_pct=20, duration_s=10)
 ```
 
-Select MANUAL and arm through the existing UI before live acquisition. The SDK
-never arms, changes modes, or changes parameters automatically. Live mode never
-falls back to simulation. Start coordinates only initialize simulation; live
-control always uses vehicle telemetry.
+`set_manual()`, `arm()` and `disarm()` explicitly request vehicle state changes
+and wait for confirmed telemetry, not optimistic UI state or just transmission.
+They raise on link loss/rejection or confirmation timeout. `arm()` uses normal
+pre-arm checks, not force-arm. The kill switch is never reset automatically.
+MANUAL setup leaves joystick driving disabled. A call to `run_thruster()` or
+`control()` alone does not select a mode or arm. Live mode never falls back to
+simulation. Start coordinates only initialize simulation; live control uses
+vehicle telemetry. Lab operation without location requires `--no-gps` at startup.
 
-The live adapter verifies `SERVO1_FUNCTION=73`, `SERVO3_FUNCTION=74`,
-`RCMAP_ROLL=1`, and `RCMAP_THROTTLE=3`. Both `PILOT_STEER_TYPE=0` and `1` are
-supported. For standard mode 0, left/right demands are converted to mean throttle
-and differential steering, compensating the pilot's reverse steering convention.
-For mode 1, left/right inputs use the native two-paddle mapping.
+`armed_manual()` wraps the explicit setup/cleanup calls; it does not suppress
+errors. It requests disarming after an experiment error or arming timeout. If
+cleanup also fails, a `BaseExceptionGroup` exposes both failures. The individual
+`set_manual()`, `arm()` and `disarm()` methods remain available.
 
-The adapter reads RC1/RC3 min, trim, max and reversal from the vehicle. Each range
-must satisfy `800 <= min < trim < max <= 2200`. PWM uses the appropriate positive
-or negative span around trim; neutral uses the reported trim. No calibration or
-pilot-mode parameters are changed. Physical wiring, reverse-capable ESC operation,
-and autopilot shaping/limits still determine the actual motor response.
+The SDK sends `MANUAL_CONTROL.y` as steering and `.z` as throttle, each scaled
+from normalized input to [-1000, 1000]. Neutral sends zeros. These are the axes
+[ArduRover consumes](https://github.com/ArduPilot/ardupilot/blob/master/Rover/GCS_MAVLink_Rover.cpp).
+The app assumes standard Rover throttle/steering mixing (`PILOT_STEER_TYPE=0`);
+left/right demands become mean throttle and differential steering, with reverse
+steering compensation. It does not query or adapt to two-paddle mode, motor
+mapping or RC calibration. `read_parameters()` remains optional diagnostics and
+is never called by control, navigation, or path execution.
 
-A fresh parameter snapshot is required at acquisition. The active adapter binds
-the verified mapping and rejects reported changes; elapsed time alone does not
-expire that mapping during a long execution. Position and heading must be no
-more than one second old; the existing heartbeat check is also enforced. The UI's
-Stop, joystick-enable, mode-change, and mission commands revoke SDK ownership.
+Raw input is not a direct motor-output command. ArduPilot still applies its own
+[manual-input processing](https://github.com/ArduPilot/ardupilot/blob/master/libraries/GCS_MAVLink/GCS_Common.cpp),
+including onboard calibration and mixing; output limits, ESC settings and wiring
+can affect physical response. The requested neutral side is an input intent,
+not a measured guarantee of zero motor thrust. The SDK does not change firmware
+parameters to bypass that processing.
+
+Position and heading must be no more than one second old outside no-GPS mode;
+the existing heartbeat check is always enforced. The UI's Stop, joystick-enable,
+mode-change, and mission commands revoke SDK ownership.
 
 ## Paths
 
@@ -289,14 +332,22 @@ runs/<name>/<UTC timestamp + unique suffix>/
     plan.json          # For path execution.
     recording.mcap
     recording.jsonl
+    recording.rrd
 ```
 
 The files contain bounded copies of received/sent MAVLink traffic, joystick data,
 and SDK commands/state/events. `/input/CONTROL` fields appear in the existing
 plot catalog. The current route and simulated position use the existing map and
 telemetry stream. Simulated motion is a kinematic preview, not evidence of actual
-thruster response. The global UI/session recording continues as before. Camera
-imagery is not copied into scoped MCAP files by this version.
+thruster response. The shared session RRD continues to cover the whole batch.
+Each run's `recording.rrd` also includes received camera JPEG frames at
+`/camera/image`, limited to that run's time window. Images use GCS `receive_time`
+and the same relative `mission` timeline as that run's telemetry; these are
+receipt times, not synchronized sensor-acquisition timestamps. No camera stream
+means no captured video frames. UI camera-status placeholders are excluded from
+per-run perception imagery. Scoped MCAP/JSONL remain telemetry/event records and
+do not contain camera image bytes. The manifest's `rrd_recording` points
+to the per-run RRD. Existing runs are not retroactively converted.
 
 Files use the recorder's existing `.part` publication behavior and are published
 after closing. Failed/cancelled runs preserve partial data and reasons. Recording
@@ -322,7 +373,7 @@ recording loader. The live viewer remains the existing session recording.
 - `backend/mapping/constraints.py`: metric geometry and continuous clearance checks.
 - `backend/control/recording.py`, `storage.py`: scoped logs and durable manifests.
 
-The scripts under `experiments/` demonstrate these primitives; no maneuver-specific
+The scripts under `experiments/motion/` demonstrate these primitives; no maneuver-specific
 classes are part of the core API.
 
 For online replanning, an axes scope can atomically replace its path:
@@ -369,7 +420,7 @@ def run(mc):
 ```
 
 The numbered experiments import coordinates and numeric settings from
-`experiments/corridor.json` through `_common.py`; that module defines no movement
+`experiments/motion/corridor.json` through `_common.py`; that module defines no movement
 helpers. Each experiment contains its own positioning and return commands.
 Acceleration and straight cases reach END through their explicit thrust plans.
 Zigzag explicitly navigates to END after its timed maneuver and then returns to
@@ -386,7 +437,7 @@ For individual files, pass that file instead of the directory. `--only NAME`
 selects a named function from its `EXPERIMENTS` mapping and can be repeated.
 
 `--mode live --no-gps` is an explicit motor-testing mode. It disables geographic
-protection and all waypoint/AUTO navigation, keeps heartbeat/arming/MANUAL/mapping
+protection and all waypoint/AUTO navigation, keeps heartbeat/arming/MANUAL
 checks, and limits each control scope to 60 seconds. The backend refuses navigation
 APIs in this mode. `mc.testing_without_gps` lets a custom motor-test script select a finite raw-input
 variant. The numbered movement experiments require feedback and are rejected in

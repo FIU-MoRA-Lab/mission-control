@@ -100,6 +100,21 @@ manual-input lease alive. Replay data never issues vehicle commands. Backend
 stdin EOF triggers cleanup when the frontend disappears. Normal shutdown
 checks armed state and sends neutral output before transport/logger teardown.
 
+The header shows **CODE MODE** while an SDK controller owns the vehicle, with a
+progress banner for routes, timed moves, and input profiles. Open-ended controls
+and feedback-driven transfers show activity and elapsed time without estimating
+a completion percentage. Replay retains its own label; code activity is still
+visible in the separate banner.
+
+**KILL SWITCH** (or Escape) latches a backend interlock, revokes SDK ownership,
+pauses joystick input, and stops simulated missions. The backend sends five
+MANUAL mode requests and neutral control pairs, using reported RC trims when
+available. Nonzero manual/SDK output, arming, and new mission starts are blocked
+until **Reset kill switch** is confirmed. Reset waits for pending mission and
+stop workers and leaves controls idle. This is a software stop over the existing
+vehicle link; sending commands does not confirm that the boat stopped. Live
+heartbeat mode/arming telemetry remains authoritative.
+
 ## Where to change something
 
 | Change | Start here |

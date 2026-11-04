@@ -11,6 +11,7 @@ def number(value, low, high, name):
 
 @dataclass(frozen=True)
 class Waypoint:
+    """Geographic point in decimal degrees: latitude [-85, 85], longitude [-180, 180]."""
     lat: float
     lon: float
 
@@ -20,12 +21,17 @@ class Waypoint:
 
     @classmethod
     def from_dict(cls, value):
+        """Construct from a mapping with numeric lat and lon in decimal degrees."""
         return cls(value["lat"], value["lon"])
 
 
 @dataclass(frozen=True)
 class LinearThrottleRamp:
-    """Change throttle from start to end in proportion to distance along a leg."""
+    """Interpolate normalized throttle from start to end by distance along a leg.
+
+    Endpoints are in [-1, 1]; Plans require nonnegative (forward) profiles.
+    Linear is a compatibility alias. Values describe requested input, not speed.
+    """
 
     start: float
     end: float
@@ -35,11 +41,15 @@ class LinearThrottleRamp:
         object.__setattr__(self, "end", number(self.end, -1, 1, "ending demand"))
 
     def evaluate(self, fraction):
+        """Return throttle at a route fraction, clamping fraction to [0, 1]."""
         return self.start + (self.end - self.start) * max(0, min(1, fraction))
 
 
 def ConstantThrottle(value):
-    """Maintain one normalized throttle input throughout a route leg."""
+    """Return a constant LinearThrottleRamp with normalized input value in [-1, 1].
+
+    Plans accept forward inputs [0, 1] only. Constant is a compatibility alias.
+    """
     return LinearThrottleRamp(value, value)
 
 
@@ -50,6 +60,7 @@ Constant = ConstantThrottle
 
 @dataclass(frozen=True)
 class Leg:
+    """Direct route segment between distinct Waypoints with a throttle profile."""
     start: Waypoint
     end: Waypoint
     throttle: LinearThrottleRamp
@@ -63,6 +74,15 @@ class Leg:
 
 @dataclass(frozen=True)
 class Plan:
+    """Continuous forward route of 1–256 Legs sharing consecutive endpoints.
+
+    arrival_radius_m is the final endpoint tolerance (0.1–5 metres).
+    launch_throttle is optional starting input assistance (0–1, default off).
+    max_tracking_error_m limits permitted route deviation (0.1–20 metres).
+    max_duration_s is the execution failure limit (1–86400 seconds).
+    All leg throttle profiles must be nonnegative. Construction validates values;
+    geographic clearance is checked separately by the backend.
+    """
     legs: tuple[Leg, ...]
     arrival_radius_m: float = 1.0
     launch_throttle: float = 0.0
@@ -85,13 +105,16 @@ class Plan:
 
     @property
     def waypoints(self):
+        """Return the route's ordered tuple of endpoints, including its start."""
         return (self.legs[0].start,) + tuple(leg.end for leg in self.legs)
 
     def to_dict(self):
+        """Return the versioned, JSON-serializable plan sent to the backend."""
         return {"version": 1, **asdict(self)}
 
     @classmethod
     def from_dict(cls, value):
+        """Parse a serialized plan; reject unsupported versions or invalid values."""
         if value.get("version", 1) != 1:
             raise ValueError("Unsupported plan version")
         return cls(

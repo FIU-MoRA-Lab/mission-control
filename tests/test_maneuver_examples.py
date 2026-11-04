@@ -9,11 +9,22 @@ from backend.control.motion import Motion
 from backend.control.navigation import RouteFollower
 from backend.mapping.constraints import OperatingArea, xy
 from backend.mapping.lake import LakeSafetyGeometry
-from experiments._common import HOME, END
+from experiments.motion._common import HOME, END
 
 
 class Client:
     def __init__(self): self.commands = []; self.plans = []; self.navigation = []; self.events = []
+    @contextmanager
+    def armed_manual(self):
+        self.set_manual()
+        try:
+            self.arm()
+            yield self
+        finally:
+            self.disarm()
+    def set_manual(self): self.events.append("set_manual")
+    def arm(self): self.events.append("arm")
+    def disarm(self): self.events.append("disarm")
     def navigate(self, destination, **kwargs):
         self.navigation.append((destination, kwargs))
         self.events.append("navigate")
@@ -36,7 +47,7 @@ class Client:
 
 class ManeuverTests(unittest.TestCase):
     def test_all_ten_cases_use_thrust_paths_or_movement_goals(self):
-        entries = discover([ROOT/'experiments'])
+        entries = discover([ROOT/'experiments/motion'])
         self.assertEqual(len(entries),10)
         for entry in entries:
             client = Client()
@@ -57,7 +68,7 @@ class ManeuverTests(unittest.TestCase):
                     self.assertEqual(motion.destination, END)
 
     def test_acceleration_thrust_tracks_distance_and_peaks_at_midpoint(self):
-        entries = discover([ROOT/'experiments'])
+        entries = discover([ROOT/'experiments/motion'])
         client = Client()
         entries[0].function(client)
         plan = client.plans[0]
@@ -74,7 +85,7 @@ class ManeuverTests(unittest.TestCase):
                 self.assertEqual(result.leg, 0)  # No arrival-radius shortcut before the peak.
 
     def test_straight_cases_keep_25_50_75_and_100_percent_thrust_over_the_route(self):
-        entries = [entry for entry in discover([ROOT/'experiments']) if entry.path.stem == "02_straight_runs"]
+        entries = [entry for entry in discover([ROOT/'experiments/motion']) if entry.path.stem == "02_straight_runs"]
         self.assertEqual([entry.name for entry in entries], ["straight-25", "straight-50", "straight-75", "straight-100"])
         for entry, thrust in zip(entries, (.25, .5, .75, 1)):
             client = Client()
@@ -86,32 +97,35 @@ class ManeuverTests(unittest.TestCase):
                 self.assertEqual(plan.legs[0].throttle.evaluate(fraction), thrust)
 
     def test_zigzag_expresses_headings_without_timestamps(self):
-        entries = discover([ROOT/'experiments'])
+        entries = discover([ROOT/'experiments/motion'])
         zigzag = next(entry for entry in entries if entry.path.stem == "04_zigzag")
         client = Client()
         zigzag.function(client)
         self.assertEqual([data["heading_deg"] for _, data in client.commands], [70, 110, 70, 110])
 
     def test_each_experiment_explicitly_positions_and_returns_to_start(self):
-        for entry in discover([ROOT/'experiments']):
+        for entry in discover([ROOT/'experiments/motion']):
             client = Client()
             entry.function(client)
+            self.assertEqual(client.events[:2], ["set_manual", "arm"])
+            self.assertEqual(client.events[-1], "disarm")
             expected = [HOME, END, HOME] if entry.path.stem == '04_zigzag' else [HOME, HOME]
             self.assertEqual([point for point, _ in client.navigation], expected)
             self.assertEqual(client.navigation[-1][1], {'speed_mps':1, 'heading_deg':90})
             if client.plans:
-                self.assertEqual(client.events, ['navigate', 'run', 'wait_until_finished', 'navigate'])
+                self.assertEqual(client.events, ['set_manual', 'arm', 'navigate', 'run', 'wait_until_finished', 'navigate', 'disarm'])
 
     def test_failed_experiment_does_not_start_a_return_movement(self):
         class FailingClient(Client):
             def run(self, *args, **kwargs): raise RuntimeError('experiment failed')
             def move(self, **kwargs): raise RuntimeError('experiment failed')
             def turn_to(self, **kwargs): raise RuntimeError('experiment failed')
-        for entry in discover([ROOT/'experiments']):
+        for entry in discover([ROOT/'experiments/motion']):
             client = FailingClient()
             with self.assertRaisesRegex(RuntimeError, 'experiment failed'):
                 entry.function(client)
             self.assertEqual([point for point, _ in client.navigation], [HOME])
+            self.assertEqual(client.events[-1], 'disarm')
 
     def test_home_and_corridor_inside_padding_and_north_of_every_fountain(self):
         area = OperatingArea(LakeSafetyGeometry().lake_geojson())

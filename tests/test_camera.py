@@ -84,6 +84,58 @@ class CameraTests(unittest.TestCase):
             feed._status("Camera unavailable · retrying")
             self.assertEqual(feed.state()["fps"], 0)
 
+    def test_run_rrds_include_only_their_camera_frames_with_receipt_timestamps(self):
+        from backend.control.recording import RunRecording
+        from backend.logger.session_recorder import SessionRecorder
+        from backend.camera import placeholder
+        import pyarrow as pa
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = SessionRecorder(root/'session',formats=('mcap','jsonl'))
+            source.open()
+            stream = rr.RecordingStream('camera-session-test')
+            stream.save(root/'session.rrd')
+            backend = MissionBackend.__new__(MissionBackend)
+            backend._telemetry_lock = threading.RLock()
+            backend._telemetry_closed = False
+            backend._started_at = time.monotonic()
+            backend.telemetry = SimpleNamespace(stream=stream)
+            backend.programmatic = SimpleNamespace(recording=None)
+            first,second = placeholder('First run'),placeholder('Second run')
+            try:
+                for index,contents in enumerate((first,second)):
+                    run = RunRecording(root/f'run-{index}',source)
+                    backend.programmatic.recording = run
+                    stamp = run.started_ns+1_000_000
+                    run.ended_ns = stamp
+                    # Simulate a prior vehicle-clock log to catch timeline leakage.
+                    writer = run.recorder.writers['rrd']
+                    writer.stream.set_time('vehicle_boot_1_1',duration=123)
+                    backend._camera_frame(placeholder('Before'),run.started_ns-1)
+                    backend._camera_frame(contents,stamp)
+                    backend._camera_frame(placeholder('After'),stamp+1)
+                    with patch('backend.bridge.runtime.time.time_ns',return_value=stamp):
+                        backend._camera_status('Camera unavailable')
+                    self.assertEqual(run.close(),[])
+                    run.camera_frame(placeholder('Closed'),stamp)
+                    reader = RrdReader(root/f'run-{index}'/'recording.rrd')
+                    frames = [chunk.to_record_batch() for chunk in reader.stream()
+                              if chunk.entity_path == '/camera/image']
+                    self.assertEqual(sum(frame.num_rows for frame in frames),1)
+                    schema = frames[0].schema
+                    self.assertIn('mission',schema.names)
+                    self.assertIn('receive_time',schema.names)
+                    self.assertNotIn('vehicle_boot_1_1',schema.names)
+                    self.assertEqual(frames[0].column('receive_time').cast(pa.int64()).to_pylist(),[stamp])
+                    blob = next(name for name in schema.names if 'blob' in name.lower())
+                    self.assertEqual(bytes(frames[0].column(blob).to_pylist()[0][0]),contents)
+            finally:
+                source.close()
+                stream.disconnect()
+            session_frames = [chunk.to_record_batch() for chunk in RrdReader(root/'session.rrd').stream()
+                              if chunk.entity_path == '/camera/image']
+            self.assertEqual(sum(frame.num_rows for frame in session_frames),8)
+
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required for stream integration")
     def test_network_frames_reconnect_and_stop_without_vehicle(self):
         sample = subprocess.run([

@@ -21,7 +21,7 @@ impl MissionControl {
                     .add_enabled(
                         self.ready,
                         accent_button(
-                            "STOP VEHICLE · Esc",
+                            "KILL SWITCH · Esc",
                             RED,
                             egui::Color32::from_rgb(67, 38, 38),
                         ),
@@ -31,9 +31,13 @@ impl MissionControl {
                     self.pause();
                     self.command("stop", json!({}));
                 }
+                if self.flag("emergency_stopped") && ui.button("Reset kill switch…").clicked() {
+                    self.confirm = Some("reset_stop".into());
+                }
             });
             ui.separator();
             self.telemetry_strip(ui);
+            self.execution_banner(ui);
         });
         egui::Panel::bottom("mission-control-status").show(ui, |ui| {
             if self.quitting && self.notice == "Saving recording…" {
@@ -81,6 +85,7 @@ impl MissionControl {
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .show(ui.ctx(), |ui| {
                     ui.label(match action.as_str() {
+                        "reset_stop" => "Reset the kill switch? Controls stay idle; enable joystick or start a new mission explicitly.",
                         "quit" => "Vehicle is armed. Are you sure you want to quit?",
                         "arm" => "Arm the vehicle?",
                         "disarm" => "Disarm the vehicle?",

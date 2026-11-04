@@ -23,3 +23,19 @@ class InputProfile:
                 u = u*u*(3-2*u)  # Continuous value and first derivative at knots.
                 return {key:a[key]+u*(b[key]-a[key]) for key in a},False
         return dict(self.frames[-1][1]),True
+
+
+class InputPulse:
+    """Backend-timed constant input that becomes neutral at the deadline."""
+
+    def __init__(self, seconds, target, keys):
+        self.duration = number(seconds,0,86400,"pulse duration")
+        if self.duration == 0:
+            raise ValueError("Pulse duration must be positive")
+        if set(target) != set(keys):
+            raise ValueError("Pulse axes do not match the control session")
+        self.target = {key:number(target[key],-1,1,key) for key in keys}
+
+    def evaluate(self, elapsed):
+        complete = elapsed >= self.duration
+        return ({key:0.0 for key in self.target} if complete else dict(self.target)),complete

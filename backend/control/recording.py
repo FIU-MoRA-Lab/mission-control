@@ -14,7 +14,7 @@ def control_record(data):
 class RunRecording:
     def __init__(self, directory, source):
         self.source = source
-        self.recorder = SessionRecorder(directory / "recording.mcap",formats=("mcap","jsonl"))
+        self.recorder = SessionRecorder(directory / "recording.mcap",formats=("mcap","jsonl","rrd"))
         self.recorder.open()
         self.started_ns = time.time_ns()
         self.ended_ns = None
@@ -39,6 +39,16 @@ class RunRecording:
             self.source.write(record)
         except RuntimeError:
             pass  # Standalone tests may have no open session recorder.
+
+    def camera_frame(self, contents, received_ns):
+        """Save an encoded JPEG in this run's RRD if its receipt is in the run window."""
+        with self._lock:
+            if self._closed or received_ns < self.started_ns or (self.ended_ns is not None and received_ns > self.ended_ns):
+                return
+            try:
+                self.recorder.writers["rrd"].write_camera_frame(contents,received_ns)
+            except Exception as exc:
+                self.recorder.errors.append(f"rrd camera: {exc}")
 
     def close(self):
         # Drain source observers before closing the destination; no lost queued tail.

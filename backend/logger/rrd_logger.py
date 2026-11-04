@@ -74,6 +74,19 @@ class RrdLogger:
         if not self.stream: raise RuntimeError("RRD writer is not open")
         log_record(self.stream, record, started_ns=self.started_ns, diagnostics=self.diagnostics)
 
+    def write_camera_frame(self, contents, received_ns):
+        """Write a JPEG with explicit receipt/run timelines, without inherited clocks.
+
+        send_columns ignores stateful stream time, so camera callbacks cannot
+        borrow or overwrite the telemetry writer's vehicle clock.
+        """
+        if not self.stream or self.closed:
+            raise RuntimeError("RRD writer is not open")
+        self.stream.send_columns("camera/image", indexes=[
+            rr.TimeColumn("mission",duration=[np.timedelta64(received_ns-self.started_ns,"ns")]),
+            rr.TimeColumn("receive_time",timestamp=[np.datetime64(received_ns,"ns")]),
+        ], columns=rr.EncodedImage.columns(blob=[contents],media_type=["image/jpeg"]),strict=True)
+
     def flush(self):
         if self.stream: self.stream.flush(timeout_sec=2)
 

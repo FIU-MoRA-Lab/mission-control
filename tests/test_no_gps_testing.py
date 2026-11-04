@@ -20,15 +20,9 @@ class NoGpsTests(unittest.TestCase):
         c.mode_str = c._confirmed_mode = 'MANUAL'
         c._last_vehicle_heartbeat = time.monotonic()
         c.master = SimpleNamespace(target_system=1,target_component=1)
-        values = {"PILOT_STEER_TYPE":1,"SERVO1_FUNCTION":73,"SERVO3_FUNCTION":74,
-                  "RCMAP_ROLL":1,"RCMAP_THROTTLE":3,"RC1_MIN":1000,"RC1_TRIM":1500,"RC1_MAX":2000,
-                  "RC1_REVERSED":0,"RC3_MIN":1000,"RC3_TRIM":1500,"RC3_MAX":2000,"RC3_REVERSED":0}
-        c._control_parameters = {k:(v,time.monotonic()) for k,v in values.items()}
         self.runtime = ControllerRuntime(c,SimpleNamespace(last_error=None),inputs=False)
         self.runtime.testing_without_gps = True
         self.service = self.runtime.programmatic
-        self.parameters = patch.object(Adapter,'parameters')
-        self.parameters.start()
         self.send = patch.object(c.transport,'send').start()
 
     def tearDown(self):
@@ -39,7 +33,7 @@ class NoGpsTests(unittest.TestCase):
         info = self.service.acquire({'mode':'live','kind':'thrusters'})
         self.service.set_target({'id':info['id'],'target':{'left':.2,'right':-.2}})
         self.service.tick()
-        self.send.assert_any_call('rc_channels_override',1,1,1600,0,1400,0,0,0,0,0)
+        self.send.assert_any_call('manual_control',1,0,200,0,0,0)
         self.assertEqual(self.service.owner['lat'],0)
         self.assertFalse(self.service.owner['geofence_enabled'])
         self.assertTrue(self.service.owner['gps_bypass'])
@@ -65,6 +59,39 @@ class NoGpsTests(unittest.TestCase):
         self.service.tick(self.service._started+61)
         self.assertIn('60 s',self.service.last['reason'])
 
+    def test_timed_pulse_survives_client_refresh_gap_and_neutralizes_at_deadline(self):
+        info = self.service.acquire({'mode':'live','kind':'thrusters'})
+        self.service.pulse({'id':info['id'],'duration_s':20,'target':{'left':.2,'right':0}})
+        started = self.service.profile_started
+        for elapsed in (1,10,19.9):
+            self.service.tick(started+elapsed)
+            self.assertTrue(self.service.busy)
+            self.assertFalse(self.service.owner['profile_complete'])
+            self.send.assert_called_with('manual_control',1,0,100,100,0,0)
+        self.service.tick(started+20.001)
+        self.assertTrue(self.service.owner['profile_complete'])
+        self.assertEqual((self.service.owner['left'],self.service.owner['right']),(0,0))
+        self.send.assert_called_with('manual_control',1,0,0,0,0,0)
+
+    def test_no_gps_pulse_limit_and_safe_cancellation(self):
+        info = self.service.acquire({'mode':'live','kind':'thrusters'})
+        with self.assertRaisesRegex(ValueError,'less than 60'):
+            self.service.pulse({'id':info['id'],'duration_s':60,'target':{'left':.2,'right':0}})
+        first = self.service.pulse({'id':info['id'],'duration_s':20,'target':{'left':.2,'right':0}})
+        second = self.service.pulse({'id':info['id'],'duration_s':20,'target':{'left':0,'right':.2}})
+        self.service.stop_movement({'id':info['id'],'profile_id':first['profile_id']})
+        self.assertEqual(self.service.owner['profile_id'],second['profile_id'])
+        self.service.stop_movement({'id':info['id'],'profile_id':second['profile_id']})
+        self.assertIsNone(self.service.profile)
+        self.send.assert_called_with('manual_control',1,0,0,0,0,0)
+
+    def test_integral_heading_is_exposed_as_float(self):
+        info = self.service.acquire({'mode':'live','kind':'thrusters'})
+        self.c.heading = 255
+        self.service.set_target({'id':info['id'],'target':{'left':0,'right':0}})
+        self.service.tick()
+        self.assertIsInstance(self.service.owner['heading'],float)
+
     def test_normal_mode_still_requires_position(self):
         self.runtime.testing_without_gps = False
         with self.assertRaisesRegex(ValueError,'GPS fix'):
@@ -81,6 +108,11 @@ class NoGpsTests(unittest.TestCase):
         from contextlib import contextmanager
         class BenchClient:
             testing_without_gps = True
+            @contextmanager
+            def armed_manual(self): yield self
+            def set_manual(self): pass
+            def arm(self): pass
+            def disarm(self): pass
             def navigate(self,*args,**kwargs): raise ValueError('Navigation requires GPS feedback')
             @contextmanager
             def control(self,**kwargs): yield self
@@ -88,7 +120,7 @@ class NoGpsTests(unittest.TestCase):
             def go_to(self,*args,**kwargs): raise ValueError('Movement requires feedback')
             def turn_to(self,**kwargs): raise ValueError('Movement requires feedback')
             def run(self,*args,**kwargs): raise ValueError('Path requires GPS feedback')
-        for entry in discover([ROOT/'experiments']):
+        for entry in discover([ROOT/'experiments/motion']):
             client = BenchClient()
             with self.assertRaisesRegex(ValueError, 'feedback'):
                 entry.function(client)

@@ -130,6 +130,11 @@ class ChartPresetTests(unittest.TestCase):
         self.assertEqual(chart_fields({"active": True, "inactive": False, "unknown": None}),
                      {})
 
+    def test_rover_raw_y_z_axes_reach_control_charts(self):
+        values = control_values("MANUAL_CONTROL", {"x":0,"r":0,"y":-200,"z":600}, "tx")
+        self.assertEqual(values, {"/diagnostics/controls/sent_throttle":1800,
+                                  "/diagnostics/controls/sent_steering":1400})
+
     def test_heartbeat_modes_armed_and_transition_deduplication(self):
         stream = Mock()
         diagnostics = RecordDiagnostics()

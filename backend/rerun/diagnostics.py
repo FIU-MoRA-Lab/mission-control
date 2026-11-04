@@ -10,12 +10,12 @@ CONTROL_ROOT = "/diagnostics/controls"
 STATE_ROOT = "/diagnostics/state"
 # name: label, units, explanation
 FIELDS = {
-    "controls/requested_throttle": ("Requested throttle → PWM", "µs", "1500 + requested throttle × 0.5; app RC override mapping."),
-    "controls/requested_steering": ("Requested steering → PWM", "µs", "1500 + requested steering × 0.5; app RC override mapping."),
-    "controls/sent_throttle": ("Sent MANUAL_CONTROL.x → PWM", "µs", "1500 + x × 0.5; comparison scale, not vehicle acknowledgment."),
-    "controls/sent_steering": ("Sent MANUAL_CONTROL.r → PWM", "µs", "1500 + r × 0.5; comparison scale, not vehicle acknowledgment."),
-    "controls/received_throttle": ("Received MANUAL_CONTROL.x → PWM", "µs", "1500 + x × 0.5; received control input."),
-    "controls/received_steering": ("Received MANUAL_CONTROL.r → PWM", "µs", "1500 + r × 0.5; received control input."),
+    "controls/requested_throttle": ("Requested throttle → PWM", "µs", "1500 + requested throttle × 0.5; comparison scale only; SDK sends normalized input, not PWM."),
+    "controls/requested_steering": ("Requested steering → PWM", "µs", "1500 + requested steering × 0.5; comparison scale only; SDK sends normalized input, not PWM."),
+    "controls/sent_throttle": ("Sent MANUAL_CONTROL.z → PWM", "µs", "1500 + z × 0.5; comparison scale, not vehicle acknowledgment."),
+    "controls/sent_steering": ("Sent MANUAL_CONTROL.y → PWM", "µs", "1500 + y × 0.5; comparison scale, not vehicle acknowledgment."),
+    "controls/received_throttle": ("Received MANUAL_CONTROL.z → PWM", "µs", "1500 + z × 0.5; received control input."),
+    "controls/received_steering": ("Received MANUAL_CONTROL.y → PWM", "µs", "1500 + y × 0.5; received control input."),
     "state/armed": ("Armed", "0/1", "HEARTBEAT MAV_MODE_FLAG_SAFETY_ARMED; autopilot-reported state."),
     "state/manual": ("MANUAL mode", "0/1", "HEARTBEAT custom mode decoded using the vehicle type."),
     "state/auto": ("AUTO mode", "0/1", "HEARTBEAT custom mode decoded using the vehicle type."),
@@ -47,8 +47,11 @@ def control_values(message_type, data, direction):
     if message_type != "MANUAL_CONTROL" or direction not in {"rx", "tx"}:
         return {}
     prefix = "sent" if direction == "tx" else "received"
+    # New Rover packets use y/z; keep old x/r recordings readable.
+    legacy = not any(data.get(field,0) for field in ("y","z")) and any(data.get(field,0) for field in ("x","r"))
+    axes = (("x","throttle"),("r","steering")) if legacy else (("z","throttle"),("y","steering"))
     return {f"{CONTROL_ROOT}/{prefix}_{axis}": 1500 + data[field] * .5
-            for field, axis in (("x", "throttle"), ("r", "steering"))
+            for field, axis in axes
             if finite(data.get(field)) and -1000 <= data[field] <= 1000}
 
 

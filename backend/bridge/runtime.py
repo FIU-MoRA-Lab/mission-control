@@ -79,7 +79,7 @@ class MissionBackend(ControllerRuntime):
         if not self.demo and os.environ.get("MISSION_CONTROL_CAMERA_ENABLED", "1") != "0":
             self.camera.configure(enabled=True)
 
-    def _camera_frame(self, contents, received_ns):
+    def _camera_frame(self, contents, received_ns, *, record_run=True):
         # Camera times describe receipt on the GCS, never onboard acquisition.
         with self._telemetry_lock:
             if self._telemetry_closed:
@@ -89,9 +89,14 @@ class MissionBackend(ControllerRuntime):
             stream.set_time("mission", duration=max(0, time.monotonic() - self._started_at))
             stream.set_time("receive_time", timestamp=np.datetime64(received_ns, "ns"))
             stream.log("camera/image", rr.EncodedImage(contents=contents, media_type="image/jpeg"))
+            programmatic = getattr(self,"programmatic",None)
+            recording = programmatic.recording if programmatic is not None else None
+            if recording is not None and record_run:
+                recording.camera_frame(contents,received_ns)
 
     def _camera_status(self, message):
-        self._camera_frame(placeholder(message), time.time_ns())
+        # Keep UI placeholders out of per-run perception imagery.
+        self._camera_frame(placeholder(message), time.time_ns(), record_run=False)
         with self._telemetry_lock:
             if not self._telemetry_closed:
                 self.telemetry.stream.log("events/camera", rr.TextLog(message))

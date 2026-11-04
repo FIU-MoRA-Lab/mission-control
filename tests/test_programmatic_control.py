@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 from dataclasses import asdict
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 from mcap.reader import make_reader
@@ -101,6 +102,51 @@ class ControlTests(unittest.TestCase):
         self.assertFalse(self.runtime.session.manual.suspended)
         with self.assertRaises(ValueError): self.service.require(info["id"])
 
+    def test_kill_switch_blocks_reacquisition_until_explicit_reset(self):
+        self.acquire()
+        self.runtime.command("stop", {})
+        self.assertTrue(self.runtime.state()["emergency_stopped"])
+        self.assertIsNone(self.service.state()["execution"])
+        with self.assertRaisesRegex(ValueError, "Kill switch"):
+            self.acquire()
+        for action, data in [("manual", {}), ("arm", {}), ("start", {}),
+                             ("manual_active", {"active": True})]:
+            with self.assertRaisesRegex(ValueError, "Kill switch"):
+                self.runtime.command(action, data)
+        # A worker that was already starting must finish before reset is allowed.
+        self.controller.is_starting_mission = True
+        with self.assertRaisesRegex(ValueError, "workers"):
+            self.runtime.command("reset_stop", {})
+        self.controller.is_starting_mission = False
+        deadline = time.monotonic() + 1
+        while self.controller._stop_in_progress and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.runtime.command("reset_stop", {})
+        self.assertFalse(self.runtime._manual_active)
+        self.assertFalse(self.service.busy)
+        self.acquire()
+
+    def test_execution_banner_reports_route_profile_and_open_ended_progress(self):
+        info = self.acquire()
+        execution = self.service.state()["execution"]
+        self.assertEqual(execution["label"], "Direct control")
+        self.assertIsNone(execution["fraction"])
+        self.service.play({"id": info["id"], "keyframes": [
+            (0, {"throttle": 0, "steering": 0}),
+            (10, {"throttle": .2, "steering": 0})]})
+        self.service.profile_started = time.monotonic() - 5
+        self.assertAlmostEqual(self.service.state()["execution"]["fraction"], .5, places=2)
+        self.service.release()
+        plan = Plan([Leg(ORIGIN, point(0,6), ConstantThrottle(.5))])
+        info = self.acquire()
+        self.service.follow({"id": info["id"], "plan": plan.to_dict()})
+        self.service.owner["progress"] = .4
+        execution = self.service.state()["execution"]
+        self.assertEqual(execution["label"], "Route · leg 1/1")
+        self.assertAlmostEqual(execution["fraction"], .4)
+        self.service.release()
+        self.assertIsNone(self.service.state()["execution"])
+
     def test_opposite_thrusters_rotate_without_translation_in_simulation(self):
         info = self.acquire(kind="thrusters")
         self.service.set_target({"id":info["id"],"target":{"left":.3,"right":-.3}})
@@ -143,26 +189,20 @@ class ControlTests(unittest.TestCase):
         self.service.tick(time.monotonic()+1)
         self.assertFalse(self.service.busy)
 
-    def test_live_paddles_encode_separate_rc_inputs_and_verify_mapping(self):
+    def test_live_thrusters_send_raw_control_without_parameter_reads(self):
         c = self.controller
         c.connected = c._confirmed_armed = True
         c.fix_type = 3
         c._confirmed_mode = c.mode_str = "MANUAL"
         c._last_vehicle_heartbeat = c._last_position_at = c._last_heading_at = time.monotonic()
         c.master = SimpleNamespace(target_system=1,target_component=1)
-        expected = {"PILOT_STEER_TYPE":1,"SERVO1_FUNCTION":73,"SERVO3_FUNCTION":74,
-                    "RCMAP_ROLL":1,"RCMAP_THROTTLE":3,"RC1_MIN":1000,"RC1_TRIM":1500,
-                    "RC1_MAX":2000,"RC1_REVERSED":0,"RC3_MIN":1000,"RC3_TRIM":1500,"RC3_MAX":2000,"RC3_REVERSED":0}
-        c._control_parameters = {key:(value,time.monotonic()) for key,value in expected.items()}
+        c._control_parameters = {}
         with patch.object(c.transport,"send") as send:
             info = self.acquire(mode="live",kind="thrusters")
             send.reset_mock()
             self.service.set_target({"id":info["id"],"target":{"left":.4,"right":-.4}})
             self.service.tick(time.monotonic()+.02)
-            send.assert_called_once_with("rc_channels_override",1,1,1700,0,1300,0,0,0,0,0)
-            self.service.takeover("test")
-            c._control_parameters["SERVO1_FUNCTION"] = (74,time.monotonic())
-            with self.assertRaises(ValueError): self.acquire(mode="live",kind="thrusters")
+            send.assert_called_once_with("manual_control",1,0,400,0,0,0)
 
     def test_joystick_meaning_is_preserved_for_verified_two_paddle_input(self):
         c = self.controller
@@ -172,7 +212,7 @@ class ControlTests(unittest.TestCase):
         c._control_parameters["PILOT_STEER_TYPE"] = (1,time.monotonic())
         with patch.object(c.transport,"send") as send:
             c.send_manual_control(200,300)
-            self.assertEqual(send.call_args_list[0].args,("manual_control",1,-100,0,0,500,0))
+            self.assertEqual(send.call_args_list[0].args,("manual_control",1,0,500,-100,0,0))
             self.assertEqual(send.call_args_list[1].args,("rc_channels_override",1,1,1750,0,1450,0,0,0,0,0))
 
     def test_scoped_logs_copy_raw_traffic_without_bleeding_across_runs(self):
@@ -252,7 +292,7 @@ class ControlTests(unittest.TestCase):
             self.assertAlmostEqual(actual,expected)
 
     def test_acceleration_and_four_straight_cases_reach_east_before_they_complete(self):
-        from experiments._common import HOME, END
+        from experiments.motion._common import HOME, END
         from backend.batch import discover
         entries = discover([Path(__file__).resolve().parents[1]/'experiments'])[:5]
         service = self.service
@@ -270,6 +310,11 @@ class ControlTests(unittest.TestCase):
                 self.assertLessEqual(math.hypot(*xy(actual,END)),1.01)
                 service.finalizers[-1].join(5)
         class Client:
+            @contextmanager
+            def armed_manual(inner): yield inner
+            def set_manual(inner): pass
+            def arm(inner): pass
+            def disarm(inner): pass
             def navigate(inner, destination, **kwargs): pass
             def run(inner, name, plan):
                 service.execute({'name':name, 'plan':plan.to_dict()})
@@ -429,7 +474,7 @@ class ControlTests(unittest.TestCase):
         def mode(value):
             c.mode_str = c._confirmed_mode = value
             return True
-        with patch('backend.control.adapter.Adapter.parameters'), patch.object(c,'upload_mission',return_value=True), \
+        with patch.object(c,'upload_mission',return_value=True), \
              patch.object(c,'set_mode',side_effect=mode) as set_mode, patch.object(c,'set_arm') as arm, patch.object(c.transport,'send') as send:
             dest = point(0,6)
             self.service.navigate({'mode':'live','destination':{'lat':dest.lat,'lon':dest.lon}})
@@ -459,13 +504,73 @@ class ControlTests(unittest.TestCase):
                     self.assertEqual(run.status()["status"],"completed")
                     self.assertTrue((run.directory/"recording.mcap").exists())
                     with mc.record("direct") as second:
-                        pass
+                        mc.run_thruster("left", throttle_pct=20, duration_s=.15, start=ORIGIN)
+                        state = mc.state()["sdk"]["control"]
+                        self.assertEqual((state["left"], state["right"]), (0, 0))
+                        mc.run_thruster("right", throttle_pct=20, duration_s=.15, start=ORIGIN)
+                        state = mc.state()["sdk"]["control"]
+                        self.assertEqual((state["left"], state["right"]), (0, 0))
                     self.assertNotEqual(run.directory,second.directory)
         finally:
             self.runtime._stop.set()
             self.runtime.worker.join(2)
             server.shutdown()
             server.server_close()
+
+    def test_live_scopes_never_request_parameters_even_after_cache_expiry(self):
+        c = self.controller
+        c.connected = c._confirmed_armed = True
+        c._confirmed_mode = 'MANUAL'
+        c._last_vehicle_heartbeat = time.monotonic()
+        c.master = SimpleNamespace(target_system=1,target_component=1)
+        self.runtime.testing_without_gps = True
+        c._control_parameters = {}
+        clock = [time.monotonic()]
+        mc = MissionControl('http://127.0.0.1:1234','test-token',mode='live')
+        with mc, patch('time.monotonic',side_effect=lambda:clock[0]), \
+             patch.object(c,'check_vehicle_link',return_value=True), \
+             patch.object(c.transport,'send') as send, \
+             patch.object(mc,'state',side_effect=lambda:{'sdk':self.service.state()}), \
+             patch.object(mc,'_call',side_effect=lambda operation,**data:self.service.command(operation,data)):
+            for elapsed in (0,61,122):
+                clock[0] += elapsed
+                with mc.control(kind='thrusters'):
+                    pass
+            self.assertTrue(send.call_args_list)
+            self.assertTrue(all(call.args[0] == 'manual_control' for call in send.call_args_list))
+            self.assertEqual(c._control_parameters,{})
+
+    def test_explicit_vehicle_actions_use_normal_arming_and_do_not_enable_joystick(self):
+        c = self.controller
+        c.connected = True
+        c._last_vehicle_heartbeat = time.monotonic()
+        c.master = SimpleNamespace(target_system=1,target_component=1)
+        c._confirmed_mode = 'MANUAL'
+        with patch.object(c.transport,'send') as send, patch.object(c,'set_mode',return_value=True) as mode:
+            self.service.command('vehicle_action',{'command':'set_manual'})
+            mode.assert_called_once_with('MANUAL')
+            self.assertFalse(self.runtime._manual_active)
+            self.service.command('vehicle_action',{'command':'arm'})
+            arm = send.call_args.args
+            self.assertEqual(arm[0],'command_long')
+            self.assertEqual(arm[5:7],(1.0,0.0))  # Normal arm; no force-arm magic.
+            self.assertFalse(c._confirmed_armed)  # Transmission is not confirmation.
+            c.emergency_stopped = True
+            with self.assertRaisesRegex(ValueError,'Kill switch'):
+                self.service.command('vehicle_action',{'command':'arm'})
+            self.service.command('vehicle_action',{'command':'disarm'})
+            self.assertEqual(send.call_args.args[5:7],(0.0,0.0))
+
+    def test_parameter_requests_preserve_unrequested_cached_values(self):
+        c = self.controller
+        c.connected = True
+        c.master = SimpleNamespace(target_system=1,target_component=1)
+        c._control_parameters = {'RC1_MIN':(1100,time.monotonic()),'RC3_MIN':(1100,time.monotonic())}
+        with patch.object(c.transport,'send') as send:
+            result = self.service.command('parameters',{'request':True,'names':['RC1_MIN']})
+        self.assertEqual(result,{'RC3_MIN':1100})
+        self.assertEqual(send.call_count,1)
+        self.assertEqual(send.call_args.args[-2],b'RC1_MIN')
 
 
 if __name__ == "__main__": unittest.main()

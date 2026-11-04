@@ -37,11 +37,20 @@ class LiveReadinessTests(unittest.TestCase):
         mc.read_parameters.side_effect = verify
         with patch('backend.batch.time.sleep'),patch('builtins.print'):
             wait_for_vehicle(mc,1,no_gps=True)
-        mc.read_parameters.assert_called_once()
+        mc.read_parameters.assert_not_called()
 
     def test_ready_vehicle_passes(self):
         state = dict(connected=True,mode='MANUAL',armed=True,fix=3,satellites=10,lat=25.7583,lon=-80.3738)
         self.assertEqual(live_blockers(state),[])
+
+    def test_experiment_setup_can_start_before_manual_and_arming(self):
+        from unittest.mock import Mock
+        mc = Mock()
+        mc.state.return_value = dict(connected=True,mode='HOLD',armed=False,fix=0,lat=0,lon=0,
+                                    vehicle_confirmed={'mode':'HOLD','armed':False})
+        with patch('builtins.print'):
+            wait_for_vehicle(mc,1,no_gps=True,require_control=False)
+        mc.read_parameters.assert_not_called()
 
     def test_companion_heartbeat_cannot_refresh_vehicle_link(self):
         with patch('backend.mavlink.transport.SessionRecorder'):

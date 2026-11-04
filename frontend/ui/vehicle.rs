@@ -27,6 +27,7 @@ impl MissionControl {
                     || self.state["live_recording_id"].as_str()
                         != Some(db.recording_id().to_string().as_str())
             });
+        let code = self.state["sdk"]["control"]["status"] == "active";
         let live = self.ready && self.flag("connected");
         let value = |name: &str, precision: usize, unit: &str| {
             if live {
@@ -42,6 +43,8 @@ impl MissionControl {
             egui::Frame::new()
                 .fill(if replay {
                     egui::Color32::from_rgb(45, 76, 112)
+                } else if code {
+                    egui::Color32::from_rgb(92, 63, 150)
                 } else {
                     egui::Color32::from_rgb(180, 38, 48)
                 })
@@ -72,7 +75,13 @@ impl MissionControl {
                                 .circle_filled(rect.center(), 3.0, egui::Color32::WHITE);
                         }
                         ui.label(
-                            egui::RichText::new(if replay { "REPLAY" } else { "LIVE" })
+                            egui::RichText::new(if replay {
+                                "REPLAY"
+                            } else if code {
+                                "CODE MODE"
+                            } else {
+                                "LIVE"
+                            })
                                 .small()
                                 .strong()
                                 .color(egui::Color32::WHITE),
@@ -82,6 +91,8 @@ impl MissionControl {
                 .response
                 .on_hover_text(if replay {
                     "Viewing a recording. The vehicle readings alongside remain live."
+                } else if code {
+                    "A programmatic controller owns the vehicle. Kill switch and Esc remain available."
                 } else {
                     "Viewing the live recording."
                 });
@@ -113,6 +124,62 @@ impl MissionControl {
             ui.separator();
             ui.small(format!("Battery {}", value("battery_v", 1, " V")));
         });
+    }
+
+    pub(crate) fn execution_banner(&self, ui: &mut egui::Ui) {
+        if self.flag("emergency_stopped") {
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(67, 25, 30))
+                .inner_margin(8.0)
+                .show(ui, |ui| {
+                    ui.colored_label(RED, "KILL SWITCH ENGAGED · Drive commands blocked");
+                    ui.small("MANUAL + neutral requested. Reset to enable new commands.");
+                    ui.small(format!(
+                        "Vehicle-reported mode: {} · {}",
+                        self.state["vehicle_confirmed"]["mode"]
+                            .as_str()
+                            .unwrap_or("unconfirmed"),
+                        if self.flag("connected") {
+                            "link online"
+                        } else {
+                            "link offline · stop delivery unavailable"
+                        }
+                    ));
+                });
+            return;
+        }
+        let execution = &self.state["sdk"]["execution"];
+        if !execution.is_object() {
+            return;
+        }
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(38, 31, 58))
+            .inner_margin(8.0)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong("CODE MODE");
+                    ui.label(if execution["mode"] == "simulation" {
+                        "SIMULATION"
+                    } else {
+                        "LIVE BOAT"
+                    });
+                    ui.separator();
+                    ui.label(execution["label"].as_str().unwrap_or("Running"));
+                    ui.small(format!(
+                        "{:.1} s elapsed",
+                        execution["elapsed_s"].as_f64().unwrap_or(0.0)
+                    ));
+                    if let Some(fraction) = execution["fraction"].as_f64() {
+                        ui.add(
+                            egui::ProgressBar::new(fraction as f32)
+                                .desired_width(200.0)
+                                .show_percentage(),
+                        );
+                    } else {
+                        ui.spinner();
+                    }
+                });
+            });
     }
 
     /// Operational controls remain visible when the detail tab changes.

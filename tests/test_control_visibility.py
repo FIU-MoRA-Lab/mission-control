@@ -77,7 +77,7 @@ class ControlVisibilityTests(unittest.TestCase):
             self.assertTrue(all(payload["sys_id"] == 255 for payload in payloads.values()))
             manual = payloads["MANUAL_CONTROL"]["data"]
             rc = payloads["RC_CHANNELS_OVERRIDE"]["data"]
-            self.assertEqual((manual["x"], manual["r"], manual["y"], manual["z"]), (1000, -500, 0, 0))
+            self.assertEqual((manual["x"], manual["r"], manual["y"], manual["z"]), (0, 0, -500, 1000))
             self.assertEqual((rc["chan1_raw"], rc["chan3_raw"]), (1250, 2000))
             self.assertTrue(controller.last_manual_send["sent"])
             schema = field_catalog({"/commands/MANUAL_CONTROL": {"x", "r"}})

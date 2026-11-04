@@ -13,8 +13,8 @@ TELEMETRY = {
     "satellites": ("Satellites", "", "GPS", "GPS_RAW_INT.satellites_visible / GPS2_RAW.satellites_visible"),
     "fix": ("GPS fix", "", "GPS", "GPS_RAW_INT.fix_type / GPS2_RAW.fix_type"),
     "current_wp": ("Current waypoint", "", "Mission", "MISSION_CURRENT.seq"),
-    "manual/throttle": ("Requested throttle", "", "Controls", "Input request → MANUAL_CONTROL.x; RC_CHANNELS_OVERRIDE.chan3_raw"),
-    "manual/yaw": ("Requested steering", "", "Controls", "Input request → MANUAL_CONTROL.r; RC_CHANNELS_OVERRIDE.chan1_raw"),
+    "manual/throttle": ("Requested throttle", "", "Controls", "Input request → MANUAL_CONTROL.z; RC_CHANNELS_OVERRIDE.chan3_raw"),
+    "manual/yaw": ("Requested steering", "", "Controls", "Input request → MANUAL_CONTROL.y; RC_CHANNELS_OVERRIDE.chan1_raw"),
 }
 for _axis in ("left_x", "left_y", "right_x", "right_y"):
     TELEMETRY[f"joystick/{_axis}"] = (
@@ -74,9 +74,9 @@ def category(message_type, topic):
 
 
 def related_group(message_type, field, fallback):
-    if (message_type == "MANUAL_CONTROL" and field == "x") or (message_type in {"RC_CHANNELS", "RC_CHANNELS_OVERRIDE"} and field == "chan3_raw") or (message_type == "VFR_HUD" and field == "throttle"):
+    if (message_type == "MANUAL_CONTROL" and field in {"z", "x"}) or (message_type in {"RC_CHANNELS", "RC_CHANNELS_OVERRIDE"} and field == "chan3_raw") or (message_type == "VFR_HUD" and field == "throttle"):
         return "01 · Controls · Throttle"
-    if (message_type == "MANUAL_CONTROL" and field == "r") or (message_type in {"RC_CHANNELS", "RC_CHANNELS_OVERRIDE"} and field == "chan1_raw"):
+    if (message_type == "MANUAL_CONTROL" and field in {"y", "r"}) or (message_type in {"RC_CHANNELS", "RC_CHANNELS_OVERRIDE"} and field == "chan1_raw"):
         return "02 · Controls · Steering"
     if message_type in {"MANUAL_CONTROL", "RC_CHANNELS", "RC_CHANNELS_OVERRIDE"}:
         return "03 · Controls · Other axes and RC channels"
@@ -100,8 +100,8 @@ def related_group(message_type, field, fallback):
 
 
 CONTROL_HELP = {
-    "01 · Controls · Throttle": "Requested forward/reverse input → sent MANUAL_CONTROL.x and RC override channel 3 → received RC telemetry. Throttle and steering both affect thruster outputs 1 and 3.",
-    "02 · Controls · Steering": "Requested turn input → sent MANUAL_CONTROL.r and RC override channel 1 → received RC telemetry. Steering changes the balance between thruster outputs 1 and 3; RC input channel 1 is not motor output 1.",
+    "01 · Controls · Throttle": "Requested forward/reverse input → sent MANUAL_CONTROL.z and RC override channel 3 → received RC telemetry. Throttle and steering both affect thruster outputs 1 and 3.",
+    "02 · Controls · Steering": "Requested turn input → sent MANUAL_CONTROL.y and RC override channel 1 → received RC telemetry. Steering changes the balance between thruster outputs 1 and 3; RC input channel 1 is not motor output 1.",
     "03 · Controls · Other axes and RC channels": "Separate RC inputs, override fields and message metadata. Channel 2 is not assigned as throttle or steering by this app.",
     "04 · Controls · Thruster outputs": "Heron's active outputs are servo 1 and servo 3. Both respond to throttle and steering. Left/right assignment is unverified. PWM is an autopilot command, not measured motor speed or thrust.",
     "12 · Other servo outputs and metadata": "Remaining servo channels and message metadata. The user reports the other servo outputs remain zero; all recorded fields stay available here.",
