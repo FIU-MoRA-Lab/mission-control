@@ -1,4 +1,4 @@
-# Ground-station perception boats/heron/experiments
+# Heron ground-station perception experiments
 
 This is an independent Python environment. It does not load models into the
 Mission Control backend or issue vehicle commands. The first experiment is a
@@ -61,7 +61,7 @@ image. This is an offline batched benchmark without the camera, network or
 Mission Control running alongside it. No depth, segmentation or avoidance model
 was trained or integrated.
 
-From this directory:
+From `boats/heron/services/perception/`:
 
 ```sh
 uv sync --locked

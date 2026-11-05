@@ -23,6 +23,7 @@ the sibling Heron repository; Mission Control does not import code from it.
 | `visualization/` | Rerun logging, field catalogs, presets, replay and default blueprints |
 | `frontend/` | Heron app state, bridge worker, controls, plots and panel layout |
 | `experiments/` | Heron experiment scripts and their settings |
+| `services/perception/` | Independent perception training environment, datasets and model outputs |
 | `config/` | Heron locations and safety geometry |
 | `paths.py` | Heron resource and generated-data paths |
 
