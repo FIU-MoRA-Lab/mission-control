@@ -10,25 +10,25 @@ source lives directly here; `Cargo.toml` points at `main.rs`, so no additional
 | `viewer.rs` | Rerun renderer/viewer setup |
 | `custom_map/` | Opt-in custom FIU view using public Rerun APIs and standard walkers |
 | `vendor/re_view_map/` | Geographic FIU view and hooks for map route tools |
-| `app.rs` | Shared state, events, focus handling and emergency-stop shortcut, and shutdown lifecycle |
-| `ui/vehicle.rs` | Vehicle telemetry and command widgets |
-| `ui/map_controls.rs` | Offline waypoint editor and lake controls |
-| `ui/recordings.rs` | MCAP/RRD loading and shared layer controls |
-| `ui/layout.rs` | Window panels, status, tabs, and confirmation dialogs |
-| `bridge/protocol.rs` | Rust channel messages and latest-axis snapshot |
-| `bridge/http.rs` | Authenticated Python API client |
-| `bridge/worker.rs` | Python child process, polling, command delivery, and input expiry |
+| `../boats/heron/frontend/app.rs` | Heron state, input, emergency-stop shortcut and lifecycle |
+| `../boats/heron/frontend/ui/` | Heron telemetry, camera, recordings, plots and window layout |
+| `ui/map_controls.rs` | Shared waypoint editor and lake controls |
+| `../boats/heron/frontend/bridge/` | Heron protocol, API client and Python child-process worker |
+
+`main.rs` and `ui/mod.rs` include Heron modules through explicit Rust paths.
+Map rendering stays shared; additional boat integrations will supply their own
+controls, fields and layouts. Each instance owns one boat. Surveyor is pending.
 
 From the repository root:
 
 ```sh
 cargo check --manifest-path frontend/Cargo.toml --locked
 cargo fmt --manifest-path frontend/Cargo.toml --check
-uv run mission-control --demo
+uv run mission-control --boat heron --demo
 ```
 
 `target/` contains generated builds and is ignored. Python SDK data producers
-and view blueprints live in `../backend/rerun/`; those are separate from these
+and view blueprints live in `../boats/heron/visualization/`; those are separate from these
 custom widgets. See [architecture](../docs/architecture.md) for the bridge.
 
 Development builds use light optimization and 16 codegen units, with stronger

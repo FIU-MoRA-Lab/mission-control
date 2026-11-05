@@ -13,11 +13,11 @@ from unittest.mock import patch
 from mcap.reader import make_reader
 from pymavlink import mavutil
 from rerun.chunk import RrdReader
-from backend.logger.records import mavlink_record, input_record
-from backend.logger.session_recorder import SessionRecorder
-from backend.logger.mcap_logger import McapLogger
-from backend.logger.jsonl_logger import JsonlLogger
-from backend.logger.rrd_logger import RrdLogger
+from boats.heron.backend.logger.records import mavlink_record, input_record
+from boats.heron.backend.logger.session_recorder import SessionRecorder
+from boats.heron.backend.logger.mcap_logger import McapLogger
+from boats.heron.backend.logger.jsonl_logger import JsonlLogger
+from boats.heron.backend.logger.rrd_logger import RrdLogger
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,12 +84,12 @@ class RecorderClockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             code = """
 import sys
-from backend.logger.session_recorder import SessionRecorder
-from backend.logger.records import input_record
+from boats.heron.backend.logger.session_recorder import SessionRecorder
+from boats.heron.backend.logger.records import input_record
 with SessionRecorder(sys.argv[1], formats=('mcap','jsonl')) as recorder:
     recorder.write(input_record({'left_x':.5}))
 assert 'rerun' not in sys.modules
-assert 'backend.controller.vehicle_control' not in sys.modules
+assert 'boats.heron.backend.controller.vehicle_control' not in sys.modules
 """
             result = subprocess.run([sys.executable, '-c', code, str(Path(tmp)/'minimal')], cwd=ROOT, capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -109,7 +109,7 @@ class PassiveRecorderTests(unittest.TestCase):
             with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as reserve:
                 reserve.bind(('127.0.0.1',0)); port=reserve.getsockname()[1]
             prefix=Path(tmp)/'capture'
-            process=subprocess.Popen([sys.executable,'-u','-m','backend.logger','--connection',f'udpin:127.0.0.1:{port}','--output',str(prefix),'--duration','1.0'],
+            process=subprocess.Popen([sys.executable,'-u','-m','boats.heron.backend.logger','--connection',f'udpin:127.0.0.1:{port}','--output',str(prefix),'--duration','1.0'],
                 cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             try:
                 with selectors.DefaultSelector() as selector:

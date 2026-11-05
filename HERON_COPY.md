@@ -9,16 +9,16 @@ The copied code is organized by responsibility in Mission Control:
 
 | Original Heron module | Mission Control location |
 | --- | --- |
-| `mission/mission_core.py` | `backend/controller/vehicle_control.py` |
-| `mission/mission_logic.py` | `backend/controller/mission_session.py`, `backend/mapping/projection.py` |
-| `mission/controls.py` | `backend/input/joystick.py` |
-| `mission/backend.py` | `backend/controller/runtime.py`, `backend/bridge/http_server.py`, `validation.py`, `standalone.py` |
+| `mission/mission_core.py` | `boats/heron/backend/controller/vehicle_control.py` |
+| `mission/mission_logic.py` | `boats/heron/backend/controller/mission_session.py`, `backend/mapping/projection.py` |
+| `mission/controls.py` | `boats/heron/backend/input/joystick.py` |
+| `mission/backend.py` | `boats/heron/backend/controller/runtime.py`, `backend/bridge/http_server.py`, `validation.py`, `standalone.py` |
 | `mission/map_tiles.py` | `backend/mapping/tiles.py` |
-| `mission/safety_geometry.py` | `backend/mapping/lake.py` |
-| `mission/log_explorer.py` | `backend/recordings/mcap_reader.py` |
-| `utils/logger.py` | `backend/logger/` |
-| `utils/network_setup.py` | `backend/mavlink/network.py` |
-| Lake overlay and sample missions | `assets/fiu_lake.geojson`, `assets/missions/` |
+| `mission/safety_geometry.py` | `boats/heron/backend/mapping/lake.py` |
+| `mission/log_explorer.py` | `boats/heron/backend/recordings/mcap_reader.py` |
+| `utils/logger.py` | `boats/heron/backend/logger/` |
+| `utils/network_setup.py` | `boats/heron/backend/mavlink/network.py` |
+| Lake overlay and sample missions | `boats/heron/config/fiu_lake.geojson`, `assets/missions/` |
 
 FIU imagery and the synthetic mission MCAP were also copied. Controller/API and
 MCAP logger tests are retained in `tests/` with updated imports.
@@ -30,6 +30,6 @@ The FIU tile renderer now validates GeoTIFF georeferencing/GeoJSON coverage and
 uses exact Web Mercator row latitudes, supporting direct geographic GPS overlays.
 These mapping changes do not alter the copied MAVLink/controller behavior.
 
-Mission Control's new Rerun integration lives in `backend/rerun/`, its managed
-composition in `backend/bridge/runtime.py`, and its native presentation in
+Mission Control's new Rerun integration lives in `boats/heron/visualization/`, its managed
+composition in `boats/heron/backend/bridge/runtime.py`, and its native presentation in
 `frontend/`. The original Textual, SolidJS/MapLibre, and Tauri UIs were not copied.

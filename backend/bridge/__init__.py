@@ -1,1 +1,1 @@
-"""Authenticated HTTP boundary and managed backend process."""
+"""Reusable authenticated HTTP transport and request validation."""

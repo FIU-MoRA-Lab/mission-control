@@ -1,22 +1,22 @@
-# Python backend
+# Shared Python infrastructure
 
-This directory is also the Python package named `backend`, with source files
-organized directly under it by responsibility.
-
-| Directory | Owns |
+| Path | Responsibility |
 | --- | --- |
-| `controller/` | Vehicle actions, mission state, runtime ownership and safety leases |
-| `input/` | Joystick HID reader and manual-control stream |
-| `mavlink/` | Transport, capture attachment, telemetry decoding and conversion |
-| `logger/` | Independent MCAP/JSONL/RRD writers and passive recorder CLI |
-| `bridge/` | HTTP boundary, validation, managed process startup, controller/Rerun composition |
-| `rerun/` | SDK logging adapters and default blueprints; the UI is in `../frontend/` |
-| `mapping/` | Geographic projection, offline basemap, imagery, and lake safety geometry |
-| `recordings/` | MCAP reading, decoding, and replay preparation |
+| `launch.py` | `uv run mission-control --boat heron`, explicit `--boat` selection, native build freshness |
+| `paths.py` | Checkout root, shared assets, frontend and common file-publication helpers |
+| `bridge/http_server.py` | Authenticated loopback HTTP transport; allocated port per backend |
+| `bridge/validation.py` | Reusable request validation |
+| `mapping/` | Projection, imagery georeferencing, raster tiles and basemap handling |
 
-`launch.py` implements `uv run mission-control`. `python -m backend.bridge` is
-the managed child started by the native frontend, not a separate GUI.
-`bridge/standalone.py` runs the copied controller bridge without Rerun for
-independent lifecycle testing. `paths.py` locates shared files in `../assets/`.
+Heron's controller, MAVLink, SDK, recording tools and managed backend are in
+[`../boats/heron/`](../boats/heron/README.md). Heron's Rerun adapters and layouts are
+in `boats/heron/visualization/`; its lake constraints live with its own configuration.
 
-See [architecture](../docs/architecture.md) for command and telemetry flows.
+```sh
+uv run mission-control --boat heron --demo
+uv run python -m boats.heron.backend.bridge --demo
+uv run python -m boats.heron.backend.bridge.standalone --help
+```
+
+The managed bridge is the native frontend's child process, not another GUI.
+Surveyor is reserved but not implemented. See [architecture](../docs/architecture.md).

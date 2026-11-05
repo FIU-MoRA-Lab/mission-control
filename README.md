@@ -1,5 +1,17 @@
 # Mission Control
 
+Boat-specific code lives in [`boats/`](boats/README.md). Heron is implemented;
+SeaRobotics Surveyor integration is pending. Each app instance owns one boat.
+
+```sh
+uv run mission-control --boat heron
+uv run mission-control --boat heron --demo
+```
+
+The map renderer and basemap are shared. Heron owns its controls, fields, layouts,
+experiments and configuration. Existing recordings stay in place; new default
+session logs go to `logs/heron/`.
+
 ## Installation
 
 Run project commands from the repository root. Requires Python 3.13+;
@@ -33,12 +45,25 @@ Run a folder of Python experiments sequentially with one automatically managed
 backend and separate logs per run:
 
 ```bash
-uv run mission-control run experiments/motion/ --mode simulation
-uv run mission-control run experiments/motion/ --mode simulation --ui
+uv run mission-control --boat heron run boats/heron/experiments/motion/ --mode simulation
+uv run mission-control --boat heron run boats/heron/experiments/motion/ --mode simulation --ui
 ```
 
-Motion cases live in `experiments/motion/`. For independent timed left/right
-thruster tests, see [experiments/testing](experiments/testing/README.md).
+If Mission Control is already open, run experiments from another terminal using
+its existing backend and vehicle connection:
+
+```bash
+uv run mission-control --boat heron run boats/heron/experiments/motion/ --attach --mode simulation
+# For an app connected to the vehicle:
+uv run mission-control --boat heron run boats/heron/experiments/motion/ --attach --mode live
+```
+
+The console command exits when the batch ends; the app stays open. Each case
+still gets separate recordings and results. See [the SDK guide](docs/sdk.md)
+for selecting cases and connecting to a specific running instance.
+
+Motion cases live in `boats/heron/experiments/motion/`. For independent timed left/right
+thruster tests, see [boats/heron/experiments/testing](boats/heron/experiments/testing/README.md).
 
 Each file exports `run(mc)` or an ordered `EXPERIMENTS` mapping. The existing UI is
 optional; the batch stops on failure and neutralizes controls between runs.

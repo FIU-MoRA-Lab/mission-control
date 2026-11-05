@@ -6,11 +6,11 @@ import tempfile
 import unittest
 import pyarrow as pa
 from rerun.chunk import RrdReader
-from backend.logger.records import input_record, mavlink_record, restore_nonfinite
-from backend.logger.rrd_logger import RrdLogger
-from backend.logger.jsonl_logger import JsonlLogger
-from backend.control.recording import control_record
-from backend.logger.mcap_logger import McapLogger
+from boats.heron.backend.logger.records import input_record, mavlink_record, restore_nonfinite
+from boats.heron.backend.logger.rrd_logger import RrdLogger
+from boats.heron.backend.logger.jsonl_logger import JsonlLogger
+from boats.heron.backend.control.recording import control_record
+from boats.heron.backend.logger.mcap_logger import McapLogger
 from pymavlink.dialects.v20 import ardupilotmega as mavlink
 from mcap.reader import make_reader
 
@@ -115,7 +115,7 @@ class TypedRecordingTests(unittest.TestCase):
             self.assertEqual(chunks["/mavlink/ATTITUDE/pitch"].column("value").to_pylist(), [[None]])
 
     def test_mcap_replay_retains_text_and_nonfinite_values(self):
-        from backend.rerun.replay import export_mcap
+        from boats.heron.visualization.replay import export_mcap
         with tempfile.TemporaryDirectory() as tmp:
             writer = McapLogger(Path(tmp)/"source")
             writer.open()

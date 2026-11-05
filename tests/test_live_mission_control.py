@@ -7,14 +7,14 @@ import unittest
 from unittest.mock import Mock, patch
 
 from pymavlink import mavutil
-from backend.controller.vehicle_control import VehicleController
-from backend.mavlink.transport import MavlinkTransport
-from backend.mavlink.telemetry import VehicleTelemetry
+from boats.heron.backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.mavlink.transport import MavlinkTransport
+from boats.heron.backend.mavlink.telemetry import VehicleTelemetry
 
 
 class LiveMissionControlTests(unittest.TestCase):
     def controller(self):
-        with patch("backend.mavlink.transport.SessionRecorder"):
+        with patch("boats.heron.backend.mavlink.transport.SessionRecorder"):
             controller = VehicleController()
         controller.connected = True
         controller.master = SimpleNamespace(target_system=1, target_component=0)

@@ -11,16 +11,16 @@ import unittest
 from unittest.mock import Mock, patch
 from mcap.reader import make_reader
 from pymavlink import mavutil
-from backend.controller.vehicle_control import VehicleController
-from backend.controller.runtime import ControllerRuntime
-from backend.rerun.schema import field_catalog
-from backend.bridge.runtime import MissionBackend
+from boats.heron.backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.controller.runtime import ControllerRuntime
+from boats.heron.visualization.schema import field_catalog
+from boats.heron.backend.bridge.runtime import MissionBackend
 from backend.mapping.tiles import RasterTiles
 
 
 class ControlVisibilityTests(unittest.TestCase):
     def test_idle_sdk_tick_preserves_joystick_output_and_neutral_ticks(self):
-        with patch("backend.mavlink.transport.SessionRecorder"):
+        with patch("boats.heron.backend.mavlink.transport.SessionRecorder"):
             controller = VehicleController()
         runtime = ControllerRuntime(controller, Mock(), inputs=False)
         sender = mavutil.mavlink.MAVLink(io.BytesIO())
@@ -46,7 +46,7 @@ class ControlVisibilityTests(unittest.TestCase):
         self.assertEqual(sender.total_packets_sent, 16)
 
     def test_sdk_ownership_transitions_clear_old_joystick_axes(self):
-        with patch("backend.mavlink.transport.SessionRecorder"):
+        with patch("boats.heron.backend.mavlink.transport.SessionRecorder"):
             controller = VehicleController()
         runtime = ControllerRuntime(controller, Mock(), inputs=False)
         manual = runtime.session.manual
@@ -114,7 +114,7 @@ class ControlVisibilityTests(unittest.TestCase):
             self.assertTrue(backend.live_recording.is_file())
 
     def test_stale_heartbeat_expires_manual_input_despite_fresh_ui(self):
-        with patch("backend.mavlink.transport.SessionRecorder"):
+        with patch("boats.heron.backend.mavlink.transport.SessionRecorder"):
             controller = VehicleController()
         service = ControllerRuntime(controller, Mock(), inputs=False)
         now = time.monotonic()
@@ -133,7 +133,7 @@ class ControlVisibilityTests(unittest.TestCase):
         controller.master.mav.manual_control_send.assert_not_called()
 
     def test_recording_failure_does_not_interrupt_control_pair(self):
-        with patch("backend.mavlink.transport.SessionRecorder"):
+        with patch("boats.heron.backend.mavlink.transport.SessionRecorder"):
             controller = VehicleController()
         sender = mavutil.mavlink.MAVLink(io.BytesIO())
         sender.set_send_callback(controller.transport.capture.sent)

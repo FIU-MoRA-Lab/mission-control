@@ -23,15 +23,12 @@ use walkers::{HttpTiles, Map, MapMemory, Tiles};
 use crate::map_overlays;
 use crate::visualizers::{
     GeoLineStringsOutput, GeoLineStringsVisualizer, GeoPointsOutput, GeoPointsVisualizer,
-    update_span,
 };
 
 pub struct MapViewState {
     tiles: Option<HttpTiles>,
     map_memory: MapMemory,
     selected_provider: MapProvider,
-
-    last_center_position: walkers::Position,
 
     /// Because `re_renderer` can have varying, multiple frames of delay, we must keep track of the
     /// last picked results for when picking results is not available on a given frame.
@@ -45,9 +42,6 @@ impl Default for MapViewState {
             map_memory: Default::default(),
             selected_provider: Default::default(),
 
-            // FIU coverage metadata supplies the fallback center until GPS data arrives.
-            last_center_position: crate::fiu_source::center()
-                .unwrap_or_else(|| walkers::lat_lon(0.0, 0.0)),
             last_gpu_picking_result: None,
         }
     }
@@ -59,7 +53,6 @@ impl re_byte_size::SizeBytes for MapViewState {
             tiles,
             map_memory: _,
             selected_provider,
-            last_center_position: _,
             last_gpu_picking_result: _,
         } = self;
 
@@ -241,10 +234,6 @@ impl ViewClass for MapView {
                 .request_repaint_after(std::time::Duration::from_millis(100));
             return Ok(Default::default());
         };
-        // State created before readiness has no FIU fallback center yet.
-        if state.tiles.is_none() && state.last_center_position == walkers::lat_lon(0.0, 0.0) {
-            state.last_center_position = center;
-        }
         let view_ctx = self.view_context(ctx, query.view_id, state, query.space_origin);
         let map_background = ViewProperty::from_archetype::<MapBackground>(&view_ctx);
         let map_zoom = ViewProperty::from_archetype::<MapZoom>(&view_ctx);
@@ -271,36 +260,19 @@ impl ViewClass for MapView {
         // Pan/Zoom handling
         //
 
-        // Rationale:
-        // - `walkers` has an auto vs. manual pan state, switching to the latter upon
-        //   user interaction. We let it keep track of that state.
-        // - The tracked location is the center of the lat/lon span of the geo objects.
-        // - When unset in the blueprint, the zoom level is computed from the geo objects and
-        //   saved as is.
-        // - Zoom computation: if multiple objects, fit them on screen, otherwise use 16.0.
-        //
-        // TODO(ab): show in UI and save in blueprint the auto vs. manual pan state (may require
-        // changes in walkers
-        // TODO(#7884): support more elaborate auto-pan/zoom modes.
-
-        let mut span = None;
-        update_span(&mut span, geo_points_visualizer.span());
-        update_span(&mut span, geo_line_strings_visualizers.span());
-
-        if let Some(span) = &span {
-            state.last_center_position = span.center();
-        }
-        let default_center_position = state.last_center_position;
+        // Follow only the boat, rather than the span of tracks and other layers.
+        // Walkers preserves manual panning until Locate boat is selected.
+        let boat_position = geo_points_visualizer
+            .batches
+            .iter()
+            .find(|(path, _)| path.to_string() == "/geo/vehicle")
+            .and_then(|(_, batch)| batch.positions.last().copied());
+        let default_center_position = boat_position.unwrap_or(center);
 
         let blueprint_zoom_level = map_zoom
             .component_or_empty::<ZoomLevel>(MapZoom::descriptor_zoom().component)?
             .map(|zoom| **zoom);
-        let default_zoom_level = span.and_then(|span| {
-            span.zoom_for_screen_size(
-                (ui.available_size() - egui::vec2(15.0, 15.0)).at_least(egui::Vec2::ZERO),
-            )
-        });
-        let zoom_level = blueprint_zoom_level.or(default_zoom_level).unwrap_or(16.0);
+        let zoom_level = blueprint_zoom_level.unwrap_or(19.0);
 
         if state.map_memory.set_zoom(zoom_level).is_err() {
             //TODO(ab): we need a better handling of this, but requires upstream work (including
@@ -322,7 +294,23 @@ impl ViewClass for MapView {
             .to_string()
             == "mission-control-live";
         let editing = crate::planning::draw(ctx, ui, None, live);
+        let mut locate_boat = false;
+        let mut imagery_home = false;
+        ui.horizontal(|ui| {
+            locate_boat = ui
+                .add_enabled(boat_position.is_some(), egui::Button::new("Locate boat"))
+                .clicked();
+            imagery_home = ui.button("FIU imagery").clicked();
+            if boat_position.is_none() {
+                ui.label("No GPS position available");
+            }
+        });
         let (tiles, map_memory) = state.ensure_and_get_mut_refs(ctx, ui.ctx())?;
+        if locate_boat {
+            map_memory.follow_my_position();
+        } else if imagery_home {
+            map_memory.center_at(center);
+        }
         let attribution = tiles.attribution();
 
         let some_tiles_manager: Option<&mut dyn Tiles> = Some(tiles);
@@ -340,9 +328,7 @@ impl ViewClass for MapView {
 
         if !editing && map_response.double_clicked() {
             map_memory.follow_my_position();
-            if let Some(zoom_level) = default_zoom_level {
-                map_memory.set_zoom(zoom_level).ok();
-            }
+            map_memory.set_zoom(19.0).ok();
         }
 
         //

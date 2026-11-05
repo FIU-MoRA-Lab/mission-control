@@ -19,8 +19,8 @@ def _():
     import polars as pl
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from backend.analysis.rrd import load_rrd
-    from backend.paths import log_directory
+    from boats.heron.backend.analysis.rrd import load_rrd
+    from boats.heron.paths import log_directory
 
     return Path, alt, io, load_rrd, log_directory, math, mo, pl
 

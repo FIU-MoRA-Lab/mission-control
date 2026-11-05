@@ -2,8 +2,8 @@
 import os
 import unittest
 from unittest.mock import patch
-from backend.rerun.blueprint import blueprint
-from backend.rerun.schema import field_catalog
+from boats.heron.visualization.blueprint import blueprint
+from boats.heron.visualization.schema import field_catalog
 
 
 class CustomMapBlueprintTests(unittest.TestCase):

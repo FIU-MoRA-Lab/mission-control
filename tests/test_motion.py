@@ -3,9 +3,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from backend.control.motion import Motion
-from backend.control.planning import Waypoint
-from backend.sdk.client import Control, MissionControl
+from boats.heron.backend.control.motion import Motion
+from boats.heron.backend.control.planning import Waypoint
+from boats.heron.backend.sdk.client import Control, MissionControl
 
 
 class MotionTests(unittest.TestCase):
@@ -46,7 +46,7 @@ class MovementClientTests(unittest.TestCase):
         client._controls = []
         client.state = Mock(side_effect=[{"sdk":{"neutralizing":True}}, {"sdk":{"neutralizing":False}}])
         client._call = Mock(return_value={"id":"c1", "kind":"axes"})
-        with patch("backend.sdk.client.time.sleep") as sleep:
+        with patch("boats.heron.backend.sdk.client.time.sleep") as sleep:
             with client.control():
                 pass
         sleep.assert_called_once_with(.05)
@@ -57,7 +57,7 @@ class MovementClientTests(unittest.TestCase):
         client.state.return_value = {"sdk":{"control":{
             "id":"c1", "status":"active", "motion_id":"m1", "motion_status":"active"}}}
         control = Control(client, {"id":"c1", "kind":"axes"})
-        with patch("backend.sdk.client.time.sleep", side_effect=KeyboardInterrupt):
+        with patch("boats.heron.backend.sdk.client.time.sleep", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 control.move(speed_mps=1, duration_s=5)
         client._call.assert_called_with("control_stop", id="c1", motion_id="m1")

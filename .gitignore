@@ -20,3 +20,7 @@ blueprints/
 /routes.json
 
 /batches/
+boats/*/.mission-control/
+boats/*/mission_saved.geojson
+boats/*/routes.json
+boats/*/runs/

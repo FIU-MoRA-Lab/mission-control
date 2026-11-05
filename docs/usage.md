@@ -6,11 +6,11 @@ Run commands from the repository root after following the [installation instruct
 
 | Use | Command |
 | --- | --- |
-| Offline demo and waypoint simulation | `uv run mission-control --demo` |
-| Demo with a recording open | `uv run mission-control --demo --recording assets/demo.mcap` |
-| Connect to a vehicle | `uv run mission-control --connection udpin:0.0.0.0:14550` |
-| Connect and preload a route | `uv run mission-control --connection udpin:0.0.0.0:14550 --mission-file route.geojson` |
-| Show help | `uv run mission-control --help` |
+| Offline demo and waypoint simulation | `uv run mission-control --boat heron --demo` |
+| Demo with a recording open | `uv run mission-control --boat heron --demo --recording assets/demo.mcap` |
+| Connect to a vehicle | `uv run mission-control --boat heron --connection udpin:0.0.0.0:14550` |
+| Connect and preload a route | `uv run mission-control --boat heron --connection udpin:0.0.0.0:14550 --mission-file route.geojson` |
+| Show help | `uv run mission-control --boat heron --help` |
 
 | Option | Meaning / default |
 | --- | --- |
@@ -23,7 +23,7 @@ Run commands from the repository root after following the [installation instruct
 In demo mode, enable **Edit route** in the FIU map, add waypoints, and select
 **Start Mission** to simulate navigation. Close the app through its window.
 For live use, configure the vehicle network first; inspect the network helper
-with `uv run python -m backend.mavlink.network --dry-run`.
+with `uv run python -m boats.heron.backend.mavlink.network --dry-run`.
 Do not share a MAVLink listening port between processes.
 
 Python and Rust pin Rerun to 0.38.1; upgrade them together.
@@ -45,7 +45,7 @@ MAVLink**, enable forwarding to `127.0.0.1:14560`, then run:
 | Option | Meaning / default |
 | --- | --- |
 | `--connection ENDPOINT` | Dedicated forwarded/mirrored MAVLink feed; default `udpin:127.0.0.1:14560` listens on this computer's loopback interface, port `14560`. Use `udpin:0.0.0.0:14560` to receive from another machine. |
-| `--output PREFIX` | File prefix, e.g. `logs/test/session` creates `session.mcap`, `session.jsonl`, and `session.rrd` in `logs/test/`. Default: a timestamped session under `logs/` (unless the log directory is overridden). |
+| `--output PREFIX` | File prefix, e.g. `logs/test/session` creates `session.mcap`, `session.jsonl`, and `session.rrd` in `logs/test/`. Default: a timestamped session under `logs/heron/` (unless the log directory is overridden). |
 | `--formats LIST` | Comma-separated formats; default `mcap,jsonl,rrd`. |
 | `--types LIST` | Record only these MAVLink message types, e.g. `HEARTBEAT,GLOBAL_POSITION_INT`; default: all types. |
 | `--joystick` | Also record local Logitech joystick samples; sends no controls. |
@@ -59,7 +59,7 @@ QGC forwarding supplies vehicle messages; recording QGC's outgoing commands
 requires a router/mirror feed containing that direction.
 
 Received messages retain onboard time when available, with arrival time stored
-separately. See [writer APIs, clocks and QGC setup](../backend/logger/README.md).
+separately. See [writer APIs, clocks and QGC setup](../boats/heron/backend/logger/README.md).
 
 ## Manual control and backend health
 
@@ -295,11 +295,11 @@ The command API uses an ephemeral loopback port and random bearer token. The
 separate Rerun gRPC telemetry receiver also binds loopback. Viewing a replay
 never sends recorded commands to the vehicle.
 
-Each recording session creates one folder inside `logs/`, with a matching
+Each recording session creates one folder inside `logs/heron/`, with a matching
 MCAP, RRD, and JSON Lines file:
 
 ```text
-logs/heron_waypoints_<timestamp>/
+logs/heron/heron_waypoints_<timestamp>/
   heron_waypoints_<timestamp>.mcap
   heron_waypoints_<timestamp>.rrd
   heron_waypoints_<timestamp>.jsonl
@@ -330,7 +330,7 @@ atomically replaces the original. Optimization or verification failures leave
 the original unchanged and report an error:
 
 ```sh
-uv run python -m backend.logger.compact /path/to/recording.rrd
+uv run python -m boats.heron.backend.logger.compact /path/to/recording.rrd
 ```
 
 `MISSION_CONTROL_DATA_DIR` overrides the automatic recording
@@ -349,7 +349,7 @@ The Mac needs `ffmpeg` on its PATH. The boat needs the onboard
 `mission-control-camera` systemd service. Install it once from your terminal:
 
 ```sh
-uv run python -m backend.camera_service install
+uv run python -m boats.heron.backend.camera_service install
 ```
 
 SSH prompts for the Pi's password if an accepted SSH key is not available.
@@ -367,14 +367,14 @@ its container. This supports the raw-only webcam even on the boat's older
 BlueOS camera manager, which rejected a raw RTSP stream.
 
 ```sh
-uv run python -m backend.camera_service status
-uv run python -m backend.camera_service logs
-uv run python -m backend.camera_service restart
-uv run python -m backend.camera_service stop
+uv run python -m boats.heron.backend.camera_service status
+uv run python -m boats.heron.backend.camera_service logs
+uv run python -m boats.heron.backend.camera_service restart
+uv run python -m boats.heron.backend.camera_service stop
 # Optional installation settings (defaults shown):
-uv run python -m backend.camera_service install --host pi@192.168.2.2 --device /dev/video0 --container blueos-core --port 5601
+uv run python -m boats.heron.backend.camera_service install --host pi@192.168.2.2 --device /dev/video0 --container blueos-core --port 5601
 # Use another supported capture rate if needed:
-uv run python -m backend.camera_service install --fps 25
+uv run python -m boats.heron.backend.camera_service install --fps 25
 ```
 
 Configuration lives on the Pi at `/etc/mission-control/camera.json`; the unit is

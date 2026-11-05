@@ -12,15 +12,15 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 from mcap.reader import make_reader
-from backend.controller.runtime import ControllerRuntime
-from backend.controller.vehicle_control import VehicleController
-from backend.logger.session_recorder import SessionRecorder
-from backend.mapping.constraints import OperatingArea, waypoint, xy
-from backend.control.planning import Waypoint, Plan, Leg, LinearThrottleRamp, ConstantThrottle
-from backend.control.adapter import Adapter, PARAMETERS
+from boats.heron.backend.controller.runtime import ControllerRuntime
+from boats.heron.backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.logger.session_recorder import SessionRecorder
+from boats.heron.backend.mapping.constraints import OperatingArea, waypoint, xy
+from boats.heron.backend.control.planning import Waypoint, Plan, Leg, LinearThrottleRamp, ConstantThrottle
+from boats.heron.backend.control.adapter import Adapter, PARAMETERS
 from backend.bridge.http_server import make_server
-from backend.sdk import MissionControl
-from backend.sdk.discovery import publish_endpoint
+from boats.heron.backend.sdk import MissionControl
+from boats.heron.backend.sdk.discovery import publish_endpoint
 
 ORIGIN = Waypoint(25.758,-80.374)
 
@@ -81,6 +81,56 @@ class ControlTests(unittest.TestCase):
 
     def acquire(self,**kwargs):
         return self.service.acquire({"start":{"lat":ORIGIN.lat,"lon":ORIGIN.lon},**kwargs})
+
+    def test_isolated_motor_test_is_lab_only_and_uses_firmware_timing(self):
+        from pymavlink import mavutil
+        c = self.controller
+        c.connected = True
+        c.autopilot_type = mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA
+        c.vehicle_type = mavutil.mavlink.MAV_TYPE_SURFACE_BOAT
+        c._confirmed_mode = "MANUAL"
+        c._last_vehicle_heartbeat = time.monotonic()
+        c.master = SimpleNamespace(target_system=1, target_component=1)
+        with self.assertRaisesRegex(ValueError, "live --no-gps"):
+            self.acquire(mode="live", kind="motor_test")
+        self.runtime.testing_without_gps = True
+        with patch.object(c.transport, "send") as send:
+            info = self.acquire(mode="live", kind="motor_test")
+            with self.assertRaisesRegex(ValueError, "finite pulses"):
+                self.service.set_target({"id":info["id"],"target":{"left":0,"right":.99}})
+            with self.assertRaisesRegex(ValueError, "exactly one"):
+                self.service.pulse({"id":info["id"],"target":{"left":.99,"right":.99},"duration_s":20})
+            send.reset_mock()
+            self.service.pulse({"id":info["id"],"target":{"left":0,"right":.99},"duration_s":20})
+            c._motor_test_ack = (mavutil.mavlink.MAV_RESULT_ACCEPTED, time.monotonic())
+            self.service.tick()
+            send.assert_called_once_with("command_long",1,1,mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
+                                         0,4,0,99,20,0,0,0)
+            self.service.profile_started -= 20.1
+            self.service.tick()
+            self.assertTrue(self.service.owner["profile_complete"])
+            self.assertIsNone(self.service.adapter.started_at)
+            self.assertEqual(send.call_args_list[-2].args[4:], (0,4,0,0,0,0,0,0))
+
+    def test_operator_kill_stops_native_motor_test_before_releasing_control(self):
+        from pymavlink import mavutil
+        c = self.controller
+        c.connected = True
+        c.autopilot_type = mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA
+        c.vehicle_type = mavutil.mavlink.MAV_TYPE_SURFACE_BOAT
+        c._confirmed_mode = "MANUAL"
+        c._last_vehicle_heartbeat = time.monotonic()
+        c.master = SimpleNamespace(target_system=1, target_component=1)
+        self.runtime.testing_without_gps = True
+        with patch.object(c.transport, "send") as send:
+            info = self.acquire(mode="live", kind="motor_test")
+            self.service.pulse({"id":info["id"],"target":{"left":0,"right":.99},"duration_s":20})
+            send.reset_mock()
+            self.runtime.command("stop", {})
+            self.assertFalse(self.service.busy)
+            self.assertTrue(c.emergency_stopped)
+            send.assert_any_call("command_long",1,1,mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
+                                 0,4,0,0,0,0,0,0)
 
     def test_expiry_neutralizes_and_revokes_without_ui_polling(self):
         info = self.acquire()
@@ -261,9 +311,9 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(restored["waypoints"],points)
 
     def test_fractional_ramp_survives_initial_neutral_in_plot_snapshots(self):
-        from backend.logger.rrd_logger import RrdLogger
-        from backend.rerun.live import RerunTelemetry
-        from backend.rerun.viewer_stream import ViewerStream
+        from boats.heron.backend.logger.rrd_logger import RrdLogger
+        from boats.heron.visualization.live import RerunTelemetry
+        from boats.heron.visualization.viewer_stream import ViewerStream
         from rerun.chunk import RrdReader
         import pyarrow as pa
         path = Path(self.temp.name)/"fractional.rrd"
@@ -292,9 +342,9 @@ class ControlTests(unittest.TestCase):
             self.assertAlmostEqual(actual,expected)
 
     def test_acceleration_and_four_straight_cases_reach_east_before_they_complete(self):
-        from experiments.motion._common import HOME, END
-        from backend.batch import discover
-        entries = discover([Path(__file__).resolve().parents[1]/'experiments'])[:5]
+        from boats.heron.experiments.motion._common import HOME, END
+        from boats.heron.backend.batch import discover
+        entries = discover([Path(__file__).resolve().parents[1]/'boats/heron/experiments'])[:5]
         service = self.service
         class Handle:
             def wait_until_finished(inner):
@@ -578,8 +628,8 @@ if __name__ == "__main__": unittest.main()
 
 class RecordingCloseRaceTests(unittest.TestCase):
     def test_late_source_sample_after_close_does_not_write_closed_destination(self):
-        from backend.control.recording import RunRecording
-        from backend.logger.records import input_record
+        from boats.heron.backend.control.recording import RunRecording
+        from boats.heron.backend.logger.records import input_record
         with tempfile.TemporaryDirectory() as tmp:
             source = SessionRecorder(Path(tmp)/'source.mcap',formats=('mcap',))
             source.open()

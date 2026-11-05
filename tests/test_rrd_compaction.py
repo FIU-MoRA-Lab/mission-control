@@ -8,10 +8,10 @@ import pyarrow as pa
 import rerun as rr
 from rerun.chunk import RrdReader
 
-from backend.logger.compact import compact_rrd, fingerprint
-from backend.logger.rrd_logger import RrdLogger
-from backend.logger.session_recorder import SessionRecorder
-from backend.rerun.live import RerunTelemetry
+from boats.heron.backend.logger.compact import compact_rrd, fingerprint
+from boats.heron.backend.logger.rrd_logger import RrdLogger
+from boats.heron.backend.logger.session_recorder import SessionRecorder
+from boats.heron.visualization.live import RerunTelemetry
 
 
 class RrdCompactionTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class RrdCompactionTests(unittest.TestCase):
             path = Path(tmp) / "test.rrd"
             self.fragmented_recording(path)
             before = path.read_bytes()
-            with patch("backend.logger.compact.fingerprint", side_effect=["original", "changed"]):
+            with patch("boats.heron.backend.logger.compact.fingerprint", side_effect=["original", "changed"]):
                 with self.assertRaisesRegex(ValueError, "changed stored"):
                     compact_rrd(path)
             self.assertEqual(path.read_bytes(), before)
@@ -59,7 +59,7 @@ class RrdCompactionTests(unittest.TestCase):
             writer = RrdLogger(Path(tmp) / "test.rrd")
             writer.open()
             writer.stream.log("sample", rr.Scalars(42))
-            with patch("backend.logger.compact.compact_rrd") as compact:
+            with patch("boats.heron.backend.logger.compact.compact_rrd") as compact:
                 writer.close()
                 writer.close()
                 compact.assert_not_called()
@@ -85,7 +85,7 @@ class LiveStorageTests(unittest.TestCase):
         stream = Mock()
         adapter = RerunTelemetry(stream, dict(crs="EPSG:4326", bounds=[], center=[]))
         state = dict(simulating=False, manual=dict(throttle=0, yaw=0, source="NONE", active=False),
-                     mode="HOLD", armed=False, connected=True, lon=-80.0, lat=25.0,
+                     mode="HOLD", armed=False, connected=True, fix=3, lon=-80.0, lat=25.0,
                      waypoints=[], lake={}, status="")
         adapter.state(state, 0)
         adapter.state(state, 1)

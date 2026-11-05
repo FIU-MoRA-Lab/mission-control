@@ -8,8 +8,8 @@ import private Rerun map modules or copy Rerun's visualizers.
 Run from the repository root:
 
 ```sh
-MISSION_CONTROL_CUSTOM_MAP=1 uv run mission-control --demo
-MISSION_CONTROL_CUSTOM_MAP=1 uv run mission-control --demo --recording assets/demo.mcap
+MISSION_CONTROL_CUSTOM_MAP=1 uv run mission-control --boat heron --demo
+MISSION_CONTROL_CUSTOM_MAP=1 uv run mission-control --boat heron --demo --recording assets/demo.mcap
 ```
 
 The launcher builds the source frontend for this option, even when a release

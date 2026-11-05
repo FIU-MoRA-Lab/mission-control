@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from mcap.writer import Writer
-from backend.recordings.mcap_reader import load_recording
+from boats.heron.backend.recordings.mcap_reader import load_recording
 
 
 class McapReaderTests(unittest.TestCase):

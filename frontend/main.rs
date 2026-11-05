@@ -1,5 +1,7 @@
 //! Launch the native frontend: Rerun host, Python bridge, and custom egui application.
+#[path = "../boats/heron/frontend/app.rs"]
 mod app;
+#[path = "../boats/heron/frontend/bridge/mod.rs"]
 mod bridge;
 mod custom_map;
 mod ui;
@@ -25,13 +27,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "Mission Control · native Rerun ground station\n\nUsage: mission-control [--demo] [--connection MAVLINK_URL] [--mission-file PATH] [--fiu-root PATH] [--recording RECORDING_PATH]\n\n--demo opens no vehicle socket. --recording opens an MCAP or RRD replay at startup."
+                    "Mission Control · native Rerun ground station\n\nUsage: mission-control [--boat heron] [--demo] [--connection MAVLINK_URL] [--mission-file PATH] [--fiu-root PATH] [--recording RECORDING_PATH]\n\nOne boat per app instance. SeaRobotics Surveyor integration is pending. --demo opens no vehicle socket. --recording opens an MCAP or RRD replay at startup."
                 );
                 return Ok(());
             }
             "--recording" => {
                 recording = Some(input.next().ok_or("--recording requires an MCAP path")?);
             }
+            "--boat" => match input.next().as_deref() {
+                Some("heron") => {}
+                Some("surveyor") => {
+                    return Err(
+                        "SeaRobotics Surveyor integration pending; use --boat heron.".into(),
+                    );
+                }
+                _ => return Err("--boat requires heron or surveyor".into()),
+            },
             "--demo" => args.push(arg),
             "--connection" | "--mission-file" | "--fiu-root" => {
                 let value = input.next().ok_or("Missing option value")?;

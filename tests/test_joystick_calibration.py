@@ -4,9 +4,9 @@ import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
-from backend.input.calibration import StickCalibration
-from backend.input.joystick import JoystickReader
-from backend.controller.runtime import ControllerRuntime
+from boats.heron.backend.input.calibration import StickCalibration
+from boats.heron.backend.input.joystick import JoystickReader
+from boats.heron.backend.controller.runtime import ControllerRuntime
 
 
 class CalibrationTests(unittest.TestCase):
@@ -124,8 +124,8 @@ class CalibrationTests(unittest.TestCase):
                     reader.running = False
                 return report
         hid = SimpleNamespace(enumerate=lambda: [{'vendor_id': 0x046d, 'path': b'test'}], device=Device)
-        with patch('backend.input.joystick._HID_AVAILABLE', True), \
-             patch('backend.input.joystick.hid', hid, create=True), \
+        with patch('boats.heron.backend.input.joystick._HID_AVAILABLE', True), \
+             patch('boats.heron.backend.input.joystick.hid', hid, create=True), \
              patch.object(reader.calibration, 'update', side_effect=calibrate):
             reader.run()
         self.assertEqual(reader.error, '')

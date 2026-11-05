@@ -3,17 +3,17 @@ import unittest
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
-from backend.batch import live_blockers, discover
-from backend.paths import ROOT
-from backend.controller.vehicle_control import VehicleController
-from backend.controller.runtime import ControllerRuntime
-from backend.control.adapter import Adapter, PARAMETERS
-from backend.control.planning import Waypoint
+from boats.heron.backend.batch import live_blockers, discover
+from boats.heron.paths import ROOT
+from boats.heron.backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.controller.runtime import ControllerRuntime
+from boats.heron.backend.control.adapter import Adapter, PARAMETERS
+from boats.heron.backend.control.planning import Waypoint
 
 
 class NoGpsTests(unittest.TestCase):
     def setUp(self):
-        with patch('backend.mavlink.transport.SessionRecorder'):
+        with patch('boats.heron.backend.mavlink.transport.SessionRecorder'):
             self.c = VehicleController()
         c = self.c
         c.connected = c._confirmed_armed = True
@@ -120,7 +120,7 @@ class NoGpsTests(unittest.TestCase):
             def go_to(self,*args,**kwargs): raise ValueError('Movement requires feedback')
             def turn_to(self,**kwargs): raise ValueError('Movement requires feedback')
             def run(self,*args,**kwargs): raise ValueError('Path requires GPS feedback')
-        for entry in discover([ROOT/'experiments/motion']):
+        for entry in discover([ROOT/'boats/heron/experiments/motion']):
             client = BenchClient()
             with self.assertRaisesRegex(ValueError, 'feedback'):
                 entry.function(client)

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from pymavlink import mavutil
-from backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.controller.vehicle_control import VehicleController
 
 
 def message(kind, **fields):
@@ -16,7 +16,7 @@ def message(kind, **fields):
 
 class MissionSpeedTests(unittest.TestCase):
     def setUp(self):
-        with patch('backend.mavlink.transport.SessionRecorder'):
+        with patch('boats.heron.backend.mavlink.transport.SessionRecorder'):
             self.controller = VehicleController()
         self.controller.add_waypoint(25.7581, -80.37365)
         self.controller.add_waypoint(25.7582, -80.37375)
@@ -38,7 +38,7 @@ class MissionSpeedTests(unittest.TestCase):
                     c._mission_req_queue.put(message(request_kind, seq=seq))
                 c._mission_req_queue.put(message('MISSION_ACK', type=ack))
 
-        with patch.object(c.transport, 'send', side_effect=send), patch('backend.controller.vehicle_control.time.sleep'):
+        with patch.object(c.transport, 'send', side_effect=send), patch('boats.heron.backend.controller.vehicle_control.time.sleep'):
             result = c.upload_mission()
         return result, sent
 
@@ -78,8 +78,8 @@ class MissionSpeedTests(unittest.TestCase):
 
         # Reach the overall upload deadline after sending home, without waiting.
         with patch.object(c.transport, 'send', side_effect=send), \
-             patch('backend.controller.vehicle_control.time.sleep'), \
-             patch('backend.controller.vehicle_control.time.time', side_effect=[0, 0, 0, 16, 16]):
+             patch('boats.heron.backend.controller.vehicle_control.time.sleep'), \
+             patch('boats.heron.backend.controller.vehicle_control.time.time', side_effect=[0, 0, 0, 16, 16]):
             self.assertFalse(c.upload_mission())
         self.assertFalse(c.mission_uploaded)
 
@@ -114,7 +114,7 @@ class MissionSpeedTests(unittest.TestCase):
         def stop_after_tick(_):
             c.simulating_mission = False
 
-        with patch('backend.controller.vehicle_control.time.sleep', side_effect=stop_after_tick):
+        with patch('boats.heron.backend.controller.vehicle_control.time.sleep', side_effect=stop_after_tick):
             c._simulated_mission_loop([{'lat': lat + 0.001, 'lon': lon + 0.001}])
         distance = math.hypot((c.lat - lat) * 111320, (c.lon - lon) * 111320 * math.cos(math.radians(lat)))
         self.assertAlmostEqual(distance, 1.7 * 0.08, places=6)

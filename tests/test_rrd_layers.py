@@ -5,8 +5,8 @@ import unittest
 from unittest.mock import Mock, patch
 import rerun as rr
 from rerun.chunk import RrdReader
-from backend.rerun.rrd import open_rrd
-from backend.rerun.schema import field_catalog, default_fields
+from boats.heron.visualization.rrd import open_rrd
+from boats.heron.visualization.schema import field_catalog, default_fields
 
 
 class RrdLayerTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class RrdLayerTests(unittest.TestCase):
 
             stream = Mock()
             stream.flush.side_effect = slow_flush
-            with patch("backend.rerun.rrd.rr.RecordingStream", return_value=stream):
+            with patch("boats.heron.visualization.rrd.rr.RecordingStream", return_value=stream):
                 result = open_rrd(source, url="rerun+http://127.0.0.1:9876/proxy")
                 self.assertEqual(result["filename"], "source.rrd")
                 stream.disconnect.assert_called_once()
@@ -71,8 +71,8 @@ class RrdLayerTests(unittest.TestCase):
             self.assertEqual(values, [[257500000.0]])
 
     def test_writer_uses_topic_hierarchy_and_reopened_layers_match(self):
-        from backend.logger.records import Record, input_record
-        from backend.logger.rrd_logger import RrdLogger
+        from boats.heron.backend.logger.records import Record, input_record
+        from boats.heron.backend.logger.rrd_logger import RrdLogger
         with tempfile.TemporaryDirectory() as tmp:
             writer = RrdLogger(Path(tmp) / "hierarchy")
             writer.open()

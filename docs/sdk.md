@@ -1,34 +1,63 @@
 # Programmatic access
 
-The synchronous SDK uses the existing backend and UI. Batch execution starts its
-own backend automatically; no separate app startup or connection file is needed.
+The synchronous SDK uses the existing backend and UI. By default, batch execution
+starts its own backend automatically; no separate app startup is needed.
+
+To run experiments from a console while Mission Control is already open:
 
 ```bash
-uv run mission-control run experiments/motion/ --mode simulation
-uv run mission-control run experiments/motion/ --mode simulation --ui
+uv run mission-control --boat heron run boats/heron/experiments/motion/ --attach --mode simulation
+uv run mission-control --boat heron run boats/heron/experiments/motion/02_straight_runs.py --attach --mode live
+```
+
+`--attach` uses SDK discovery to reuse the running app's backend, vehicle
+connection, map and session recording. It starts no backend or window. The
+command exits after completion, failure or Ctrl+C; experiment controls are
+released and the app remains available. Per-case recordings and `results.json`
+are saved under the usual batch directory; the shared session recording stays
+in the app's existing session directory. Live execution requires `--mode live`.
+The app must remain open for the duration of the experiment.
+
+Use `--only NAME` to select cases, or `--endpoint-file /path/to/connection.json`
+with `--attach` to choose a specific backend. A missing or unreachable backend
+fails without starting a replacement. Finish existing SDK control or recordings
+first. `--ui`, `--connection` and `--mission-file` configure a new session and
+cannot be combined with `--attach`. No-GPS testing inherits the running backend's
+setting; `--no-gps` with `--attach` verifies that it was already enabled at startup
+and cannot enable it on an ordinary app.
+
+To start a separate backend instead:
+
+```bash
+uv run mission-control --boat heron run boats/heron/experiments/motion/ --mode simulation
+uv run mission-control --boat heron run boats/heron/experiments/motion/ --mode simulation --ui
 ```
 
 The second command attaches the existing UI for live monitoring. Closing that UI
-detaches it; the batch continues. When the batch ends, it closes its backend and
-attached UI. The first UI run may build the native viewer from current sources.
+detaches it; the batch continues. After completion, failure, or Ctrl+C, the runner
+releases SDK control and keeps the backend and attached UI alive until you close
+the window. You can continue controlling the boat through the UI or gamepad;
+re-arm in the UI if the experiment disarmed on exit. Ctrl+C while waiting for
+the window does not close it. Without an attached UI, the backend closes when
+the batch ends. The first UI run may build the native viewer from current sources.
 The layout and controls are unchanged.
 
 Run one file, choose a log root, or list the order without starting a backend:
 
 ```bash
-uv run mission-control run experiments/motion/02_straight_runs.py --mode simulation
-uv run mission-control run experiments/motion/ --output-dir ./logs/batches
-uv run mission-control run experiments/motion/ --list
+uv run mission-control --boat heron run boats/heron/experiments/motion/02_straight_runs.py --mode simulation
+uv run mission-control --boat heron run boats/heron/experiments/motion/ --output-dir ./logs/batches
+uv run mission-control --boat heron run boats/heron/experiments/motion/ --list
 ```
 
-Use `experiments/testing/` for [independent timed thruster tests](../experiments/testing/README.md).
-Choose a subfolder to run only that suite; `experiments/` recursively includes both.
+Use `boats/heron/experiments/testing/` for [independent timed thruster tests](../boats/heron/experiments/testing/README.md).
+Choose a subfolder to run only that suite; `boats/heron/experiments/` recursively includes both.
 
 Each file defines an ordinary synchronous function:
 
 ```python
 def run(mc):
-    from backend.sdk import Waypoint
+    from boats.heron.backend.sdk import Waypoint
     with mc.control(start=Waypoint(25.7581, -80.37365)) as control:
         control.move(speed_mps=0.6, heading_deg=90, duration_s=5)
 ```
@@ -74,7 +103,7 @@ endpoint visits and return movements must be explicit in each experiment.
 **Live batches are explicit:**
 
 ```bash
-uv run mission-control run my_experiments/ --mode live --ui --connection udpin:0.0.0.0:14550
+uv run mission-control --boat heron run my_experiments/ --mode live --ui --connection udpin:0.0.0.0:14550
 ```
 
 The runner waits for connection and, unless `--no-gps` is selected, GPS readiness.
@@ -91,11 +120,11 @@ other cases use speed/heading goals. Live mappings
 still need to match the vehicle as described below.
 
 For ad hoc scripts that attach to an already running app, start
-`uv run mission-control --demo` first, then use `MissionControl.connect()` as
-shown below. The numbered scripts in `experiments/motion/` are the runnable examples.
+`uv run mission-control --boat heron --demo` first, then use `MissionControl.connect()` as
+shown below. The numbered scripts in `boats/heron/experiments/motion/` are the runnable examples.
 
 ```python
-from backend.sdk import MissionControl
+from boats.heron.backend.sdk import MissionControl
 
 with MissionControl.connect() as mc:
     print(mc.state())                 # Does not renew the joystick/UI lease.
@@ -105,8 +134,8 @@ with MissionControl.connect() as mc:
     print(mc.area())                 # Lake geometry and revision.
 ```
 
-The private discovery file is `.mission-control/connection.json` in the data
-root, with owner-only permissions. `MISSION_CONTROL_ENDPOINT_FILE` selects an
+The private discovery file is `boats/heron/.mission-control/connection.json`
+beneath the shared data root, with owner-only permissions. `MISSION_CONTROL_ENDPOINT_FILE` selects an
 explicit descriptor when more than one backend is running. The backend owns the
 vehicle connection; scripts never open a second MAVLink transport. Discovery is
 currently local to the same machine and checkout/data root.
@@ -187,8 +216,8 @@ Nothing automatically keeps an old nonzero command alive if your algorithm stall
 A control scope with no command expires after two seconds.
 
 ```python
-mc.run_thruster("left", throttle_pct=20, duration_s=3)   # Right stays neutral.
-mc.run_thruster("right", throttle_pct=20, duration_s=3)  # Left stays neutral.
+mc.run_thruster("left", throttle_pct=20, duration_s=3)   # Requests right neutral.
+mc.run_thruster("right", throttle_pct=20, duration_s=3)  # Requests left neutral.
 mc.run_thrusters(left_throttle_pct=30, right_throttle_pct=-20, duration_s=5)
 ```
 
@@ -197,7 +226,7 @@ the client's selected mode, maintain inputs for the duration, then request neutr
 and release control. Both calls block until finished. `throttle_pct` ranges from
 -100 (full reverse) to 100 (full forward); zero is neutral. It means requested
 input percentage, not measured electrical power, thrust or speed. The
-single-thruster call keeps the other side neutral; the dual call requires both
+single-thruster call requests the other side neutral; the dual call requires both
 `left_throttle_pct` and `right_throttle_pct`. Lower-level `Control.set()` and
 `hold()` continue to use normalized inputs in [-1, 1]. Live `control()` scopes
 send raw normalized MAVLink input without fetching RC calibration or converting
@@ -211,7 +240,19 @@ guarantee of measured motor response. Lower-level `hold()` remains a client
 set/sleep loop with short command expiry.
 Use `start=Waypoint(...)` to initialize simulation, or `mode="live"` to explicitly
 select live control. In no-GPS mode, each call must be shorter than 60 seconds.
-See the [minimal thruster experiment](../experiments/testing/01_thrusters.py).
+See the [minimal thruster experiment](../boats/heron/experiments/testing/01_thrusters.py).
+
+For an **isolated live bench test**, use
+`mc.test_thruster("right", throttle_pct=99, duration_s=20)` with `--no-gps`.
+This selects Rover's individual motor-test order (3 left, 4 right), bypassing
+steering/throttle mixing. Whole, nonzero percentages in [-100, 100] and durations
+in (0, 30] seconds are supported. It selects MANUAL, confirms disarming first,
+checks command acceptance, and confirms disarming on exit. Do not enclose it in
+`armed_manual()`. The firmware arms for the test, owns its timeout, and disarms
+at completion. Rover temporarily suspends its GCS/throttle/crash failsafes while
+the native test is active. Backend stop/kill/link checks remain active; a lost
+connection leaves the firmware timeout as the bound. See the
+[lab test notes](../boats/heron/experiments/testing/README.md).
 
 For lower-level control within a scope:
 
@@ -278,7 +319,7 @@ the backend, independently of the script. The first implementation is a small
 lookahead/heading controller; it is not a calibrated dynamics controller.
 
 ```python
-from backend.sdk import Plan, Leg, LinearThrottleRamp, ConstantThrottle
+from boats.heron.backend.sdk import Plan, Leg, LinearThrottleRamp, ConstantThrottle
 
 A, B, C = mc.routes.get("test-line")
 plan = Plan(
@@ -366,14 +407,14 @@ recording loader. The live viewer remains the existing session recording.
 
 ## Code boundaries
 
-- `backend/sdk/`: synchronous transport, discovery, and small caller conveniences.
-- `backend/control/planning.py`, `navigation.py`: pure path data and guidance.
-- `backend/control/service.py`: ownership, expiry, execution coordination.
-- `backend/control/adapter.py`: normalized demands to MAVLink or simulation.
-- `backend/mapping/constraints.py`: metric geometry and continuous clearance checks.
-- `backend/control/recording.py`, `storage.py`: scoped logs and durable manifests.
+- `boats/heron/backend/sdk/`: synchronous transport, discovery, and small caller conveniences.
+- `boats/heron/backend/control/planning.py`, `navigation.py`: pure path data and guidance.
+- `boats/heron/backend/control/service.py`: ownership, expiry, execution coordination.
+- `boats/heron/backend/control/adapter.py`: normalized demands to MAVLink or simulation.
+- `boats/heron/backend/mapping/constraints.py`: metric geometry and continuous clearance checks.
+- `boats/heron/backend/control/recording.py`, `storage.py`: scoped logs and durable manifests.
 
-The scripts under `experiments/motion/` demonstrate these primitives; no maneuver-specific
+The scripts under `boats/heron/experiments/motion/` demonstrate these primitives; no maneuver-specific
 classes are part of the core API.
 
 For online replanning, an axes scope can atomically replace its path:
@@ -420,7 +461,7 @@ def run(mc):
 ```
 
 The numbered experiments import coordinates and numeric settings from
-`experiments/motion/corridor.json` through `_common.py`; that module defines no movement
+`boats/heron/experiments/motion/corridor.json` through `_common.py`; that module defines no movement
 helpers. Each experiment contains its own positioning and return commands.
 Acceleration and straight cases reach END through their explicit thrust plans.
 Zigzag explicitly navigates to END after its timed maneuver and then returns to

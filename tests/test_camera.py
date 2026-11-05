@@ -13,9 +13,9 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from backend.camera import CameraFeed, validate_source
-from backend.rerun.blueprint import blueprint
-from backend.bridge.runtime import MissionBackend
+from boats.heron.backend.camera import CameraFeed, validate_source
+from boats.heron.visualization.blueprint import blueprint
+from boats.heron.backend.bridge.runtime import MissionBackend
 import rerun as rr
 from rerun.chunk import RrdReader
 
@@ -40,7 +40,7 @@ class CameraTests(unittest.TestCase):
         messages = []
         feed = CameraFeed(lambda *_: None, messages.append)
         try:
-            with patch("backend.camera.shutil.which", return_value=None):
+            with patch("boats.heron.backend.camera.shutil.which", return_value=None):
                 feed.configure(enabled=True)
                 feed._thread.join(timeout=2)
             self.assertIn("Install FFmpeg", feed.state()["status"])
@@ -60,7 +60,7 @@ class CameraTests(unittest.TestCase):
             backend._telemetry_closed = False
             backend._started_at = time.monotonic()
             backend.telemetry = SimpleNamespace(stream=stream)
-            from backend.camera import placeholder
+            from boats.heron.backend.camera import placeholder
             backend._camera_frame(placeholder("Test"), 1_700_000_000_000_000_000)
             stream.flush()
             stream.disconnect()
@@ -76,7 +76,7 @@ class CameraTests(unittest.TestCase):
 
     def test_reported_frame_rate_uses_received_frames_and_resets_on_disconnect(self):
         feed = CameraFeed(lambda *_: None, lambda *_: None)
-        with patch("backend.camera.time.monotonic", return_value=102):
+        with patch("boats.heron.backend.camera.time.monotonic", return_value=102):
             feed._enabled = True
             feed._last_frame = 102
             feed._frame_times.extend(101 + frame / 30 for frame in range(31))
@@ -85,9 +85,9 @@ class CameraTests(unittest.TestCase):
             self.assertEqual(feed.state()["fps"], 0)
 
     def test_run_rrds_include_only_their_camera_frames_with_receipt_timestamps(self):
-        from backend.control.recording import RunRecording
-        from backend.logger.session_recorder import SessionRecorder
-        from backend.camera import placeholder
+        from boats.heron.backend.control.recording import RunRecording
+        from boats.heron.backend.logger.session_recorder import SessionRecorder
+        from boats.heron.backend.camera import placeholder
         import pyarrow as pa
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -114,7 +114,7 @@ class CameraTests(unittest.TestCase):
                     backend._camera_frame(placeholder('Before'),run.started_ns-1)
                     backend._camera_frame(contents,stamp)
                     backend._camera_frame(placeholder('After'),stamp+1)
-                    with patch('backend.bridge.runtime.time.time_ns',return_value=stamp):
+                    with patch('boats.heron.backend.bridge.runtime.time.time_ns',return_value=stamp):
                         backend._camera_status('Camera unavailable')
                     self.assertEqual(run.close(),[])
                     run.camera_frame(placeholder('Closed'),stamp)

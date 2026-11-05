@@ -10,17 +10,17 @@ from unittest.mock import patch
 from mcap.reader import make_reader
 from pymavlink import mavutil
 
-from backend.logger.session_recorder import SessionRecorder, default_log_directory
+from boats.heron.backend.logger.session_recorder import SessionRecorder, default_log_directory
 
 
 class LogDirectoryTests(unittest.TestCase):
     def test_default_is_mission_control_and_creates_directory(self):
-        from backend.paths import ROOT
+        from boats.heron.paths import ROOT
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(default_log_directory(), ROOT / "logs")
+            self.assertEqual(default_log_directory(), ROOT / "logs" / "heron")
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"MISSION_CONTROL_DATA_DIR": temp}, clear=True):
             with SessionRecorder() as logger:
-                self.assertEqual(logger.output_path.parent.parent, Path(temp) / "logs")
+                self.assertEqual(logger.output_path.parent.parent, Path(temp) / "logs" / "heron")
             with logger.output_path.open("rb") as stream:
                 self.assertEqual(list(make_reader(stream).iter_messages()), [])
 
@@ -35,9 +35,9 @@ class LogDirectoryTests(unittest.TestCase):
             self.assertEqual(SessionRecorder().output_path.parent.parent, Path(temp))
 
     def test_empty_override_uses_project(self):
-        from backend.paths import ROOT
+        from boats.heron.paths import ROOT
         with patch.dict(os.environ, {"HERON_LOG_DIR": ""}, clear=True):
-            self.assertEqual(default_log_directory(), ROOT / "logs")
+            self.assertEqual(default_log_directory(), ROOT / "logs" / "heron")
 
 
 class McapLoggerTests(unittest.TestCase):
@@ -63,7 +63,7 @@ class McapLoggerTests(unittest.TestCase):
     def test_round_trip_preserves_fields_channels_timestamps_and_indexes(self):
         timestamp = 1_791_756_123_123_456_789
         with SessionRecorder(output_path=self.path) as logger:
-            with patch('backend.logger.records.time.time_ns', return_value=timestamp):
+            with patch('boats.heron.backend.logger.records.time.time_ns', return_value=timestamp):
                 logger.log_message(self.heartbeat())
             attitude = self.encoder.attitude_encode(42, math.nan, 0.2, 0.3, 0, 0, 0)
             attitude.pack(self.encoder)
@@ -131,7 +131,7 @@ class McapLoggerTests(unittest.TestCase):
         self.assertFalse(logger.active_json_path.exists())
 
     def test_generated_and_explicit_paths_use_mcap_suffix(self):
-        with patch('backend.paths.log_directory', return_value=Path(self.temp.name)):
+        with patch('boats.heron.paths.log_directory', return_value=Path(self.temp.name)):
             first = SessionRecorder()
             second = SessionRecorder()
         self.assertEqual(first.output_path.suffix, '.mcap')
@@ -147,7 +147,7 @@ class McapLoggerTests(unittest.TestCase):
         from mcap.exceptions import EndOfFile
         logger = SessionRecorder(output_path=self.path)
         logger.open()
-        with patch('backend.logger.session_recorder.time.monotonic', return_value=logger._last_flush + 2):
+        with patch('boats.heron.backend.logger.session_recorder.time.monotonic', return_value=logger._last_flush + 2):
             logger.log_message(self.heartbeat())
             logger.flush()
         # A live file has no footer yet. Sequential reading can recover its

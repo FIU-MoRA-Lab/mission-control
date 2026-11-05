@@ -16,10 +16,10 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from PIL import Image
-from backend.controller.runtime import ControllerRuntime
+from boats.heron.backend.controller.runtime import ControllerRuntime
 from backend.bridge.http_server import make_server
 from backend.mapping.tiles import RasterTiles
-from backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.controller.vehicle_control import VehicleController
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[1]
 class ControllerBridgeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        with patch('backend.mavlink.transport.SessionRecorder'):
+        with patch('boats.heron.backend.mavlink.transport.SessionRecorder'):
             self.controller = VehicleController()
         self.tiles = RasterTiles(REPO / 'assets/fiu-basemap', Path(self.temp.name) / 'cache')
         self.backend = ControllerRuntime(self.controller, self.tiles, inputs=False)
@@ -311,7 +311,7 @@ class BackendProcessTests(unittest.TestCase):
             environment = {**os.environ, 'PYTHONPATH': str(REPO),
                            'HERON_CACHE_DIR': str(Path(temp) / 'tiles'),
                            'HERON_LOG_DIR': str(Path(temp) / 'logs')}
-            process = subprocess.Popen([sys.executable, '-u', '-m', 'backend.bridge.standalone',
+            process = subprocess.Popen([sys.executable, '-u', '-m', 'boats.heron.backend.bridge.standalone',
                                         '--managed', '--no-ip-setup', '--connection',
                                         f'udpin:127.0.0.1:{port}'], env=environment,
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,

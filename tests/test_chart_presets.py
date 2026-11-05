@@ -8,15 +8,15 @@ from unittest.mock import Mock
 import rerun as rr
 from rerun.chunk import RrdReader
 from mcap.writer import Writer
-from backend.logger.session_recorder import SessionRecorder
-from backend.rerun.diagnostics import RecordDiagnostics, chart_fields, control_values, diagnostic_catalog
-from backend.rerun.presets import PRESETS, preset_fields, raw
-from backend.rerun.schema import field_catalog
-from backend.rerun.blueprint import blueprint
-from backend.rerun.replay import export_mcap
-from backend.rerun.rrd import open_rrd
-from backend.recordings.mcap_reader import load_recording
-from backend.rerun.live import RerunTelemetry
+from boats.heron.backend.logger.session_recorder import SessionRecorder
+from boats.heron.visualization.diagnostics import RecordDiagnostics, chart_fields, control_values, diagnostic_catalog
+from boats.heron.visualization.presets import PRESETS, preset_fields, raw
+from boats.heron.visualization.schema import field_catalog
+from boats.heron.visualization.blueprint import blueprint
+from boats.heron.visualization.replay import export_mcap
+from boats.heron.visualization.rrd import open_rrd
+from boats.heron.backend.recordings.mcap_reader import load_recording
+from boats.heron.visualization.live import RerunTelemetry
 
 
 def chunks(path):

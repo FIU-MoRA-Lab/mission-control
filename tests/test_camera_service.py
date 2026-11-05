@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from backend.camera_service import INSTALL, configuration, encoder_command, install_payload, serve, ssh_command
+from boats.heron.backend.camera_service import INSTALL, configuration, encoder_command, install_payload, serve, ssh_command
 
 
 class CameraServiceTests(unittest.TestCase):
@@ -59,7 +59,7 @@ class CameraServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "camera.json"
             path.write_text(json.dumps(configuration()))
-            with patch("backend.camera_service.subprocess.run", side_effect=subprocess.CalledProcessError(1, "docker")) as run:
+            with patch("boats.heron.backend.camera_service.subprocess.run", side_effect=subprocess.CalledProcessError(1, "docker")) as run:
                 with self.assertRaises(subprocess.CalledProcessError):
                     serve(path)
                 self.assertEqual(run.call_count, 1)
@@ -68,7 +68,7 @@ class CameraServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "camera.json"
             path.write_text(json.dumps(configuration()))
-            with patch("backend.camera_service.subprocess.run", side_effect=[
+            with patch("boats.heron.backend.camera_service.subprocess.run", side_effect=[
                 SimpleNamespace(stdout="sha256:" + "b" * 64 + "\n"), SimpleNamespace(returncode=42)
             ]) as run:
                 self.assertEqual(serve(path), 42)

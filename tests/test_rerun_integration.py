@@ -12,13 +12,13 @@ import unittest
 from unittest.mock import patch
 from mcap.writer import Writer
 
-from backend.bridge.runtime import MissionBackend
-from backend.controller.runtime import ControllerRuntime
+from boats.heron.backend.bridge.runtime import MissionBackend
+from boats.heron.backend.controller.runtime import ControllerRuntime
 from backend.mapping.tiles import RasterTiles
-from backend.controller.vehicle_control import VehicleController
-from backend.mapping.lake import LakeSafetyGeometry
+from boats.heron.backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.mapping.lake import LakeSafetyGeometry
 from backend.mapping.basemap import build_basemap, local_xy
-from backend.rerun.replay import export_mcap
+from boats.heron.visualization.replay import export_mcap
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,11 +46,11 @@ class RerunIntegrationTests(unittest.TestCase):
             writer.finish()
 
     def test_live_catalog_is_reused_and_invalidated_when_fields_arrive(self):
-        from backend.rerun.schema import field_catalog
-        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'MISSION_CONTROL_DATA_DIR': tmp}), patch('backend.mavlink.transport.SessionRecorder'):
+        from boats.heron.visualization.schema import field_catalog
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'MISSION_CONTROL_DATA_DIR': tmp}), patch('boats.heron.backend.mavlink.transport.SessionRecorder'):
             backend = MissionBackend(VehicleController(), RasterTiles(ROOT/'assets/fiu-basemap', tmp), None, demo=True)
             backend.gamepad = None
-            with patch('backend.bridge.runtime.field_catalog', wraps=field_catalog) as build:
+            with patch('boats.heron.backend.bridge.runtime.field_catalog', wraps=field_catalog) as build:
                 first = backend.state(refresh_ui=False)['field_catalog']
                 self.assertIs(first, backend.state(refresh_ui=False)['field_catalog'])
                 self.assertEqual(build.call_count, 1)
@@ -63,7 +63,7 @@ class RerunIntegrationTests(unittest.TestCase):
             backend.close()
 
     def test_observer_does_not_renew_manual_lease(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'MISSION_CONTROL_DATA_DIR': tmp}), patch('backend.mavlink.transport.SessionRecorder'):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'MISSION_CONTROL_DATA_DIR': tmp}), patch('boats.heron.backend.mavlink.transport.SessionRecorder'):
             controller = VehicleController()
             tiles = RasterTiles(ROOT/'assets/fiu-basemap', tmp)
             backend = ControllerRuntime(controller, tiles, inputs=False)
@@ -100,7 +100,7 @@ class RerunIntegrationTests(unittest.TestCase):
             tiles.close()
 
     def test_demo_starts_without_vehicle_socket_and_replay_pauses_input(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'MISSION_CONTROL_DATA_DIR': tmp}), patch('backend.mavlink.transport.SessionRecorder'), patch('backend.controller.vehicle_control.VehicleController.start', side_effect=AssertionError('Live connection')):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'MISSION_CONTROL_DATA_DIR': tmp}), patch('boats.heron.backend.mavlink.transport.SessionRecorder'), patch('boats.heron.backend.controller.vehicle_control.VehicleController.start', side_effect=AssertionError('Live connection')):
             controller=VehicleController()
             backend=MissionBackend(controller,RasterTiles(ROOT/'assets/fiu-basemap',tmp),None,demo=True,cache=tmp)
             backend.start()
@@ -111,14 +111,14 @@ class RerunIntegrationTests(unittest.TestCase):
                 backend.command('manual',{})
                 with self.assertRaises(ValueError):
                     backend.command('manual_axes',{'throttle':1000,'yaw':300})
-                with patch('backend.bridge.runtime.export_mcap', wraps=export_mcap):
+                with patch('boats.heron.backend.bridge.runtime.export_mcap', wraps=export_mcap):
                     backend.command('load_mcap',{'path':str(self.demo_recording)})
                 dataset = backend._recording['datasets'][0]
                 field = dataset['fields'][0]
                 selection = {'topic':dataset['topic'], 'field':field['name'],
                              'minimum':field['min'], 'maximum':field['max'],
                              'radius':4, 'opacity':.5, 'track_visible':False}
-                with patch('backend.bridge.runtime.export_mcap', wraps=export_mcap) as export:
+                with patch('boats.heron.backend.bridge.runtime.export_mcap', wraps=export_mcap) as export:
                     filtered = backend.command('filter_readings',selection)
                     self.assertGreater(filtered['matched'],0)
                     self.assertFalse(export.call_args.kwargs['include_raw'])
@@ -148,7 +148,7 @@ class RerunIntegrationTests(unittest.TestCase):
             env = dict(os.environ, MISSION_CONTROL_CACHE_DIR=tmp, MISSION_CONTROL_DATA_DIR=tmp, HERON_LOG_DIR=str(Path(tmp)/"logs"))
             diagnostics = Path(tmp)/'bridge.stderr'
             stderr = diagnostics.open('w')
-            process = subprocess.Popen([sys.executable, '-u', '-m', 'backend.bridge',
+            process = subprocess.Popen([sys.executable, '-u', '-m', 'boats.heron.backend.bridge',
                                         '--demo', '--rerun-url', url], stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=stderr,
                                        text=True, env=env)

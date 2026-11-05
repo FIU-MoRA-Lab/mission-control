@@ -2,8 +2,8 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from backend.control.adapter import PARAMETERS
-from backend.sdk import MissionControl
+from boats.heron.backend.control.adapter import PARAMETERS
+from boats.heron.backend.sdk import MissionControl
 
 
 class VehicleSdkTests(unittest.TestCase):

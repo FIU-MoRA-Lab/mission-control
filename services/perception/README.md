@@ -1,4 +1,4 @@
-# Ground-station perception experiments
+# Ground-station perception boats/heron/experiments
 
 This is an independent Python environment. It does not load models into the
 Mission Control backend or issue vehicle commands. The first experiment is a

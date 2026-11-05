@@ -10,11 +10,11 @@ import unittest
 from unittest.mock import Mock, patch
 
 from mcap.writer import Writer
-from backend.bridge.runtime import MissionBackend
-from backend.controller.runtime import ControllerRuntime
-from backend.mavlink.telemetry_values import telemetry_fields
-from backend.rerun.replay import export_mcap
-from backend.rerun.schema import field_catalog, DEFAULT_FIELDS
+from boats.heron.backend.bridge.runtime import MissionBackend
+from boats.heron.backend.controller.runtime import ControllerRuntime
+from boats.heron.backend.mavlink.telemetry_values import telemetry_fields
+from boats.heron.visualization.replay import export_mcap
+from boats.heron.visualization.schema import field_catalog, DEFAULT_FIELDS
 
 
 def recording_fixture(path):
@@ -98,7 +98,7 @@ class PlotShutdownTests(unittest.TestCase):
             ],
         })
         self.assertIn("/vehicle/mode", next(item for item in second["chart_presets"] if item["id"] == "state_changes")["visible_fields"])
-        with patch("backend.bridge.runtime.rr.RecordingStream") as stream:
+        with patch("boats.heron.backend.bridge.runtime.rr.RecordingStream") as stream:
             for info, preset in [(second, "throttle"), (first, "throttle"), (second, "state_changes")]:
                 fields = next(item for item in info["chart_presets"] if item["id"] == preset)["visible_fields"]
                 backend.command("configure_plots", dict(source="replay", application_id=info["application_id"],
@@ -160,7 +160,7 @@ class PlotShutdownTests(unittest.TestCase):
             diagnostics = Path(tmp)/"stderr"
             with diagnostics.open("w") as stderr:
                 env = dict(os.environ, MISSION_CONTROL_DATA_DIR=tmp, MISSION_CONTROL_CACHE_DIR=tmp, HERON_LOG_DIR=tmp)
-                process = subprocess.Popen([sys.executable, "-u", "-m", "backend.bridge", "--demo", "--rerun-url", url],
+                process = subprocess.Popen([sys.executable, "-u", "-m", "boats.heron.backend.bridge", "--demo", "--rerun-url", url],
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True, env=env)
                 try:
                     with selectors.DefaultSelector() as selector:

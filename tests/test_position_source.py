@@ -3,13 +3,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from backend.controller.vehicle_control import VehicleController
-from backend.mavlink.telemetry import VehicleTelemetry
+from boats.heron.backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.mavlink.telemetry import VehicleTelemetry
 
 
 class PositionSourceTests(unittest.TestCase):
     def test_only_global_position_updates_coordinates_and_all_messages_are_logged(self):
-        with patch("backend.mavlink.transport.SessionRecorder"):
+        with patch("boats.heron.backend.mavlink.transport.SessionRecorder"):
             controller = VehicleController()
         controller.connected = True
         messages = []

@@ -9,7 +9,7 @@ import rerun as rr
 
 from backend.mapping.tiles import RasterTiles
 from backend.mapping.georeference import GeoRaster, mercator_lat
-from backend.rerun.live import RerunTelemetry
+from boats.heron.visualization.live import RerunTelemetry
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -57,12 +57,34 @@ class FiuGeoreferenceTests(unittest.TestCase):
         stream = Mock()
         adapter = RerunTelemetry(stream, {'crs': 'EPSG:4326', 'bounds': [], 'center': []})
         adapter.state({"simulating": False, "manual": {"throttle": 0, "yaw": 0, "source": "NONE", "active": False},
-                       "mode": "HOLD", "armed": False, "connected": True,
+                       "mode": "HOLD", "armed": False, "connected": True, "fix": 2,
                        "lat": 25.758, "lon": -80.374, "waypoints": [], "lake": {}, "status": ""}, 1)
         marker = next(call.args[1] for call in stream.log.call_args_list if call.args[0] == "geo/vehicle")
         self.assertEqual(marker.positions.as_arrow_array().to_pylist(), [[25.758, -80.374]])
         self.assertEqual(marker.colors.as_arrow_array().to_pylist(), [0xff2d37ff])
         self.assertEqual(marker.radii.as_arrow_array().to_pylist(), [-7.0])
+
+    def test_gps_loss_clears_boat_without_clearing_map_and_recovery_breaks_track(self):
+        stream = Mock()
+        adapter = RerunTelemetry(stream, {'crs': 'EPSG:4326', 'bounds': [], 'center': []})
+        state = dict(simulating=False, manual=dict(throttle=0, yaw=0, source="NONE", active=False),
+                     mode="HOLD", armed=False, connected=True, fix=1,
+                     lat=25.7424611, lon=-80.3760635, waypoints=[], lake={}, status="")
+        adapter.state(state, 0)
+        self.assertFalse(any(c.args[0] == "geo/vehicle" for c in stream.log.call_args_list))
+        adapter.state(state | dict(fix=3, lat=25.758), 1)
+        adapter.state(state | dict(fix=3, lat=25.75801), 2)
+        stream.reset_mock()
+        adapter.state(state, 3)
+        adapter.state(state, 4)
+        clears = [c.args[0] for c in stream.log.call_args_list if isinstance(c.args[1], rr.Clear)]
+        self.assertEqual(clears, ["geo/vehicle"])
+        stream.reset_mock()
+        # Returning to the same position must redraw the marker, with no line
+        # connecting it across the interval where the fix was unavailable.
+        adapter.state(state | dict(fix=3, lat=25.75801), 5)
+        self.assertTrue(any(c.args[0] == "geo/vehicle" for c in stream.log.call_args_list))
+        self.assertFalse(any(c.args[0].startswith("geo/track/") for c in stream.log.call_args_list))
 
     def test_live_overlays_keep_lat_lon_as_geopoints(self):
         stream=Mock()

@@ -4,14 +4,14 @@ import time
 import unittest
 from unittest.mock import patch
 
-from backend.control.adapter import Adapter
-from backend.control.planning import Waypoint
-from backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.control.adapter import Adapter
+from boats.heron.backend.control.planning import Waypoint
+from boats.heron.backend.controller.vehicle_control import VehicleController
 
 
 class RawControlTests(unittest.TestCase):
     def setUp(self):
-        with patch('backend.mavlink.transport.SessionRecorder'):
+        with patch('boats.heron.backend.mavlink.transport.SessionRecorder'):
             self.c = VehicleController()
         self.c.connected = self.c._confirmed_armed = True
         self.c._confirmed_mode = 'MANUAL'

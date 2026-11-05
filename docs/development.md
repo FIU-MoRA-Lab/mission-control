@@ -6,67 +6,45 @@ Custom Rust/egui panels provide vehicle controls and an offline mission editor.
 Python owns MAVLink, mission execution, gamepad input, and the 20 Hz control loop.
 
 The controller is **copied into this repository** under
-`backend/controller/`.
+`boats/heron/backend/controller/`.
 
 Run project commands from the repository root. For setup, see the [installation instructions](../README.md).
 
 ## Code organization
 
-The top-level folders follow the two running processes. Source files live
-directly inside these folders.
+The application separates boat integrations from shared infrastructure:
 
 ```text
-backend/                     Python process: vehicle commands and data production
-  launch.py                  Entry point for uv run mission-control
-  paths.py                   Shared checkout/resource paths
-  controller/                Vehicle actions, mission facade, runtime ownership
-    vehicle_control.py       Arm, modes, stop, manual sends, mission upload/execution
-    mission_session.py       Mission editing/action facade
-    runtime.py               Commands, input leases, startup and cleanup
-  input/                     Input acquisition and manual-driving policy
-    joystick.py              Live HID reader, independent display callback
-    manual_control.py        Manual axes, neutral handling and 20 Hz command stream
-  mavlink/                   Connection, capture hooks and vehicle state decoding
-    transport.py             Open/send/receive connection; attach capture observer
-    network.py               Explicit vehicle network configuration helper
-    telemetry.py             Decode heartbeat, position, health, and mission messages
-    telemetry_values.py      Convert raw protocol fields to scalar display units
-  logger/                    Standalone writers and passive recorder CLI
-    records.py               Source/arrival timestamps and explicit clock domains
-    session_recorder.py      Background dispatch; drain/flush/finalize on close
-    mcap_logger.py           MCAP writer
-    jsonl_logger.py          JSON Lines writer
-    rrd_logger.py            Headless RRD writer
-    mavlink_capture.py       Record RX/TX traffic independently of vehicle actions
-    __main__.py              uv run mission-recorder (works alongside QGC)
-  bridge/                    Python side of the frontend/backend boundary
-    __main__.py              Managed backend startup and parent-death cleanup
-    http_server.py           Authenticated HTTP state/command/shutdown endpoints
-    validation.py            Incoming command validation
-    runtime.py               Connect controller, recording tools, and Rerun SDK
-    standalone.py            Controller-only bridge for independent testing
-  rerun/                     Python Rerun SDK adapters, not UI widgets
-    blueprint.py             Default viewport layout sent to the viewer
-    live.py                  Log live controller snapshots into Rerun
-    replay.py                Convert MCAP and filtered reading layers to Rerun
-  mapping/                   GeoTIFF metadata, geographic projection, tiles, lake geometry
-  recordings/                MCAP reading and geographic replay preparation
-frontend/                    Rust native app: Rerun viewer and custom egui UI
-  main.rs                    Parse arguments and start the viewer/bridge
-  viewer.rs                  Create the embedded native Rerun viewer
-  app.rs                     Shared UI state, focus/input handling, and lifecycle
-  ui/                        Custom panels: vehicle, map controls, recordings, layout
-  bridge/                    Rust side: process worker, HTTP client, channel protocol
-  vendor/re_view_map/        Pinned Rerun geographic view with local FIU tiles
-  Cargo.toml                 Rust build; main.rs is the explicit binary entry point
-assets/                      Shared data: imagery, lake geometry, missions, demo MCAP
-tests/                       Controller bridge, MCAP logger, and Rerun integration
+boats/
+  heron/
+    backend/                 Controller, MAVLink, input, API composition, SDK, logging
+    visualization/           Heron fields, Rerun adapters, replay and default layouts
+    frontend/                Heron Rust app state, bridge and custom panels
+    experiments/             Heron experiment suites and settings
+    config/                  Heron locations and safety geometry
+    paths.py                 Heron resources and generated-data scope
+  surveyor/                  Integration pending; no assumed protocol or fields
+backend/
+  launch.py                  Boat selection and native app launch
+  paths.py                   Shared resource paths and file-publication helpers
+  bridge/                    Reusable HTTP transport and request validation
+  mapping/                   Projection, imagery, tiles and basemap utilities
+frontend/
+  main.rs                    Native window entry point; currently wires Heron modules
+  viewer.rs                  Embedded Rerun viewer
+  ui/map_controls.rs         Shared map interaction widgets
+  custom_map/                Opt-in map renderer
+  vendor/re_view_map/         Current geographic renderer and route hooks
+  Cargo.toml                 Single Rust binary; boat modules use explicit paths
+assets/                      Shared basemap imagery
+logs/                        Existing recordings; new default Heron logs in heron/
+tests/                       Controller, SDK, recording, map and process verification
 ```
 
-For button/visual changes, start in `frontend/ui/`. For vehicle behavior, start
-in `backend/controller/`. For viewer layout or logged data, use
-`backend/rerun/` and `frontend/viewer.rs`. For process communication, use the
-`bridge/` folders on both sides.
+For vehicle behavior, start in `boats/heron/backend/controller/` or `control/`.
+For custom vehicle panels, use `boats/heron/frontend/ui/`. For logged fields and
+layouts, use `boats/heron/visualization/`. Shared map code remains in `frontend/`
+and `backend/mapping/`. See [boat ownership](../boats/README.md).
 
 [Architecture and message flow](architecture.md) explains how these pieces
 connect. [Backend guide](../backend/README.md) and [frontend guide](../frontend/README.md)

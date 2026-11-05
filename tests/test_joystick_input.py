@@ -11,11 +11,11 @@ from pymavlink import mavutil
 
 from mcap.reader import make_reader
 from rerun.chunk import RrdReader
-from backend.input.joystick import JoystickReader
-from backend.controller.vehicle_control import VehicleController
-from backend.bridge.runtime import MissionBackend
+from boats.heron.backend.input.joystick import JoystickReader
+from boats.heron.backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.bridge.runtime import MissionBackend
 from backend.mapping.tiles import RasterTiles
-from backend.rerun.replay import export_mcap
+from boats.heron.visualization.replay import export_mcap
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,7 +41,7 @@ class JoystickInputTests(unittest.TestCase):
                 reader.running = False
                 return [255, 0, 0, 255]
             def close(self): pass
-        with patch('backend.input.joystick._HID_AVAILABLE', True), patch('backend.input.joystick.hid', SimpleNamespace(enumerate=lambda: [{'vendor_id':0x046d, 'product_id':1, 'path':b'test'}], device=Device), create=True), patch('time.sleep'):
+        with patch('boats.heron.backend.input.joystick._HID_AVAILABLE', True), patch('boats.heron.backend.input.joystick.hid', SimpleNamespace(enumerate=lambda: [{'vendor_id':0x046d, 'product_id':1, 'path':b'test'}], device=Device), create=True), patch('time.sleep'):
             reader.run()
         throttle, steering, source, positions, raw, timestamp_ns = queue_out.get_nowait()
         self.assertEqual((throttle, steering, source), (1000, -1000, 'GAMEPAD'))
@@ -52,8 +52,8 @@ class JoystickInputTests(unittest.TestCase):
     def test_live_display_updates_while_recording_is_blocked(self):
         import threading
         from unittest.mock import Mock
-        from backend.controller.runtime import ControllerRuntime
-        from backend.logger.session_recorder import SessionRecorder
+        from boats.heron.backend.controller.runtime import ControllerRuntime
+        from boats.heron.backend.logger.session_recorder import SessionRecorder
         entered, release, updated = threading.Event(), threading.Event(), threading.Event()
         with tempfile.TemporaryDirectory() as tmp:
             recorder = SessionRecorder(Path(tmp)/"input", formats=("jsonl",))
@@ -103,7 +103,7 @@ class JoystickInputTests(unittest.TestCase):
                 if not reports: reader.running = False
                 return report
             def close(self): pass
-        with patch('backend.input.joystick._HID_AVAILABLE', True), patch('backend.input.joystick.hid', SimpleNamespace(enumerate=lambda: [{'vendor_id':0x046d,'product_id':1,'path':b'test'}], device=Device), create=True):
+        with patch('boats.heron.backend.input.joystick._HID_AVAILABLE', True), patch('boats.heron.backend.input.joystick.hid', SimpleNamespace(enumerate=lambda: [{'vendor_id':0x046d,'product_id':1,'path':b'test'}], device=Device), create=True):
             reader.run()
         self.assertEqual(shown[-1][3]['left_x'], 7/127)
         self.assertTrue(all(any(len(sample)>3 and sample[4][0]==128+i for sample in shown) for i in range(8)))

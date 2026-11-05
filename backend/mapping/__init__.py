@@ -1,1 +1,1 @@
-"""Geographic projection, lake safety geometry, and offline imagery."""
+"""Shared geographic projection, offline imagery and map view defaults."""

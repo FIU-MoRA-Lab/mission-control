@@ -1,11 +1,11 @@
 """Cover the public timed thruster API, including validation and cleanup."""
 import unittest
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-from backend.batch import discover
-from backend.paths import ROOT
-from backend.sdk import MissionControl, Waypoint
-from backend.sdk.client import Control
+from boats.heron.backend.batch import discover
+from boats.heron.paths import ROOT
+from boats.heron.backend.sdk import MissionControl, Waypoint
+from boats.heron.backend.sdk.client import Control
 
 
 class ThrusterSdkTests(unittest.TestCase):
@@ -65,26 +65,42 @@ class ThrusterSdkTests(unittest.TestCase):
             self.mc.run_thruster("left", throttle_pct=20, duration_s=2)
         self.assertEqual(self.scope.__exit__.call_args.args[0], RuntimeError)
 
-    def test_example_sweeps_each_motor_for_twenty_seconds_per_percentage(self):
-        entry, = discover([ROOT / "experiments/testing"])
+    def test_example_preserves_right_only_bench_settings(self):
+        entry, = discover([ROOT / "boats/heron/experiments/testing"])
         mc = MagicMock()
         entry.function(mc)
-        expected = [call(side, throttle_pct=percent, duration_s=20)
-                    for percent in (20, 40, 60, 80, 100) for side in ("left", "right")]
-        self.assertEqual(mc.run_thruster.call_args_list, expected)
-        mc.armed_manual.assert_called_once_with()
-        mc.armed_manual.return_value.__exit__.assert_called_once_with(None,None,None)
+        mc.test_thruster.assert_called_once_with("right", throttle_pct=99, duration_s=20)
+        mc.run_thruster.assert_not_called()
+        mc.armed_manual.assert_not_called()
 
     def test_sweep_failure_prevents_further_pulses(self):
-        entry, = discover([ROOT / "experiments/testing"])
+        entry, = discover([ROOT / "boats/heron/experiments/testing"])
         mc = MagicMock()
-        mc.run_thruster.side_effect = [None, RuntimeError("motor test stopped")]
+        mc.test_thruster.side_effect = RuntimeError("motor test stopped")
         with self.assertRaisesRegex(RuntimeError, "motor test stopped"):
             entry.function(mc)
-        self.assertEqual(mc.run_thruster.call_args_list,
-                         [call("left", throttle_pct=20, duration_s=20),
-                          call("right", throttle_pct=20, duration_s=20)])
-        self.assertEqual(mc.armed_manual.return_value.__exit__.call_args.args[0],RuntimeError)
+        mc.test_thruster.assert_called_once_with("right", throttle_pct=99, duration_s=20)
+
+    def test_native_test_selects_one_motor_and_disarms_on_failure(self):
+        self.mc.default_mode = "live"
+        self.mc.testing_without_gps = True
+        with patch.object(self.mc, "set_manual") as manual, patch.object(self.mc, "disarm") as disarm:
+            self.control.pulse.side_effect = RuntimeError("test rejected")
+            self.scope.__exit__.return_value = False
+            with self.assertRaisesRegex(RuntimeError, "test rejected"):
+                self.mc.test_thruster("right", throttle_pct=99, duration_s=20)
+            manual.assert_called_once_with()
+            self.assertEqual(disarm.call_count, 2)
+            self.acquire.assert_called_once_with(kind="motor_test")
+            self.control.pulse.assert_called_once_with(20, left=0, right=.99)
+
+    def test_native_test_validation_happens_before_vehicle_actions(self):
+        with patch.object(self.mc, "set_manual") as manual:
+            for inputs in ({}, {"throttle_pct": 0}, {"throttle_pct": 1.5},
+                           {"duration_s": 31}, {"duration_s": 0}, {"side": "both"}):
+                with self.subTest(inputs=inputs), self.assertRaises(ValueError):
+                    self.mc.test_thruster(**{"side":"right", "throttle_pct":99, "duration_s":20, **inputs})
+            manual.assert_not_called()
 
 
 

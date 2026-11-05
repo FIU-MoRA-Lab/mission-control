@@ -1,1 +1,1 @@
-"""Python controller backend and application launcher."""
+"""Shared launcher, HTTP utilities and basemap infrastructure."""

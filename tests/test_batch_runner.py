@@ -9,14 +9,14 @@ import unittest
 from unittest.mock import patch
 from mcap.reader import make_reader
 
-from backend.batch import discover, backend_session
+from boats.heron.backend.batch import discover, backend_session, attached_session
 
 ROOT = Path(__file__).resolve().parents[1]
 START = 'Waypoint(25.7581,-80.37365)'
 
 
 def controls(body='pass'):
-    return f'''from backend.sdk import Waypoint
+    return f'''from boats.heron.backend.sdk import Waypoint
 
 def run(mc):
     with mc.control(start={START}) as control:
@@ -45,15 +45,47 @@ class DiscoveryTests(unittest.TestCase):
 
 
 class FailureUiTests(unittest.TestCase):
+    def test_attach_rejects_incompatible_or_busy_backend_without_releasing_its_controls(self):
+        from unittest.mock import MagicMock
+        for mode, requested_no_gps, backend_no_gps, state in (
+            ('live',False,False,{'demo':True,'sdk':{}}),
+            ('live',True,False,{'sdk':{}}),
+            ('simulation',False,True,{'sdk':{}}),
+            ('simulation',False,False,{'sdk':{'control':{'status':'active'}}}),
+            ('simulation',False,False,{'sdk':{'recording':{'status':'recording'}}}),
+        ):
+            with self.subTest(mode=mode,state=state):
+                client = MagicMock()
+                client.__enter__.return_value = client
+                client.state.return_value = state
+                client.testing_without_gps = backend_no_gps
+                with patch('boats.heron.backend.batch.MissionControl.connect',return_value=client):
+                    with self.assertRaises(ValueError), attached_session(mode=mode,no_gps=requested_no_gps):
+                        self.fail('Should reject before executing boats/heron/experiments')
+                client._call.assert_not_called()
+                client.__exit__.assert_called_once()
+
+    def test_attach_missing_backend_never_starts_a_replacement(self):
+        from boats.heron.backend.batch import main
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root/'case.py'
+            script.write_text('def run(mc): pass\n')
+            with patch('boats.heron.backend.batch.backend_session') as start:
+                result = main([str(script),'--attach','--endpoint-file',str(root/'missing.json'),
+                               '--output-dir',str(root/'out')])
+            self.assertEqual(result,1)
+            start.assert_not_called()
+
     def test_default_batch_directory_respects_the_shared_log_root(self):
-        from backend.batch import main
+        from boats.heron.backend.batch import main
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             script = root/'case.py'
             script.write_text('def run(mc): pass\n')
             logs = root/'custom-logs'
             with patch.dict(os.environ,{'MISSION_CONTROL_DATA_DIR':str(root/'data'),'MISSION_CONTROL_LOG_DIR':str(logs)}), \
-                 patch('backend.batch.backend_session',side_effect=RuntimeError('startup fixture')):
+                 patch('boats.heron.backend.batch.backend_session',side_effect=RuntimeError('startup fixture')):
                 result = main([str(script)])
             self.assertEqual(result,1)
             batches = list((logs/'batches').iterdir())
@@ -61,14 +93,15 @@ class FailureUiTests(unittest.TestCase):
             self.assertTrue((batches[0]/'results.json').exists())
             self.assertFalse((root/'data/batches').exists())
 
-    def test_failure_keeps_backend_alive_until_attached_ui_is_closed(self):
+    def check_ui_lifetime(self, error=None):
         from contextlib import contextmanager
         from types import SimpleNamespace
         from unittest.mock import Mock
-        from backend.batch import main
+        from boats.heron.backend.batch import main
         active = []
         mc = Mock()
         mc.state.return_value = {'viewer_attached':True}
+        mc.testing_without_gps = False
         @contextmanager
         def backend(*args,**kwargs):
             active.append(True)
@@ -79,21 +112,78 @@ class FailureUiTests(unittest.TestCase):
         def wait(**kwargs):
             if not kwargs:
                 self.assertEqual(active,[True])
+                mc._call.assert_called_with('release')
                 ui.poll.return_value = 1
             return 0
         ui.wait.side_effect = wait
         with tempfile.TemporaryDirectory() as tmp:
             entry = SimpleNamespace(path=Path(tmp)/'case.py')
-            with patch('backend.batch.discover',return_value=[entry]),patch('backend.batch.backend_session',backend), \
-                 patch('backend.launch.launch_viewer',return_value=ui),patch('backend.batch.execute',side_effect=RuntimeError('case failed')):
+            with patch('boats.heron.backend.batch.discover',return_value=[entry]),patch('boats.heron.backend.batch.backend_session',backend), \
+                 patch('backend.launch.launch_viewer',return_value=ui),patch('boats.heron.backend.batch.execute',side_effect=error):
                 result = main([tmp,'--ui','--output-dir',str(Path(tmp)/'out')])
-        self.assertEqual(result,1)
+        self.assertEqual(result,130 if isinstance(error,KeyboardInterrupt) else 1 if error else 0)
         mc._call.assert_called_with('release')
         self.assertEqual(active,[])
         self.assertTrue(any(not call.kwargs for call in ui.wait.call_args_list))
+        ui.terminate.assert_not_called()
+
+    def test_success_keeps_backend_alive_until_attached_ui_is_closed(self):
+        self.check_ui_lifetime()
+
+    def test_failure_keeps_backend_alive_until_attached_ui_is_closed(self):
+        self.check_ui_lifetime(RuntimeError('case failed'))
+
+    def test_interruption_keeps_backend_alive_until_attached_ui_is_closed(self):
+        self.check_ui_lifetime(KeyboardInterrupt())
+
+    def test_ctrl_c_while_waiting_does_not_close_ui(self):
+        from unittest.mock import Mock
+        from boats.heron.backend.batch import wait_for_ui
+        ui = Mock()
+        ui.poll.side_effect = [None,None,0]
+        ui.wait.side_effect = [KeyboardInterrupt(),0]
+        wait_for_ui(ui)
+        self.assertEqual(ui.wait.call_count,2)
+        ui.terminate.assert_not_called()
 
 
 class BatchProcessTests(unittest.TestCase):
+    def test_attached_batches_reuse_backend_and_leave_it_alive_after_success_failure_or_interrupt(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ,{
+            'MISSION_CONTROL_DATA_DIR':tmp,'MISSION_CONTROL_CACHE_DIR':tmp,
+        }):
+            root = Path(tmp)
+            owner = root/'owner'
+            owner.mkdir()
+            with backend_session(owner,mode='simulation',connection='',mission_file=None,inputs=False,timeout=15) as (mc,endpoint):
+                for body, code, status in (
+                    ('pass',0,'completed'),
+                    ('raise RuntimeError("attached failure")',1,'failed'),
+                    ('raise KeyboardInterrupt()',130,'interrupted'),
+                ):
+                    script = root/'case.py'
+                    script.write_text(controls(body))
+                    output = root/status
+                    process = subprocess.run([
+                        sys.executable,'-m','boats.heron.backend.batch',str(script),'--attach',
+                        '--endpoint-file',str(endpoint),'--output-dir',str(output),
+                    ],cwd=ROOT,capture_output=True,text=True,timeout=30)
+                    self.assertEqual(process.returncode,code,process.stdout+process.stderr)
+                    batch = next(output.iterdir())
+                    summary = json.loads((batch/'results.json').read_text())
+                    self.assertEqual(summary['status'],status)
+                    run = Path(summary['results'][0]['directory'])
+                    manifest = json.loads((run/'manifest.json').read_text())
+                    self.assertEqual(manifest['owner_pid'],json.loads(endpoint.read_text())['pid'])
+                    self.assertTrue((run/'recording.mcap').exists())
+                    self.assertFalse((batch/'backend.log').exists())
+                    self.assertFalse((batch/'session').exists())
+                    self.assertNotEqual((mc.state()['sdk'].get('control') or {}).get('status'),'active')
+                # A subsequent client can still acquire control on the same process.
+                from boats.heron.backend.sdk import Waypoint
+                with mc.control(start=Waypoint(25.7581,-80.37365)) as control:
+                    control.hold(.1,throttle=0,steering=0)
+
     def run_batch(self, temp, files):
         root = Path(temp)
         scripts = root/'scripts'
@@ -101,14 +191,14 @@ class BatchProcessTests(unittest.TestCase):
         for name,source in files.items(): (scripts/name).write_text(source)
         data = root/'data'
         env = dict(os.environ,MISSION_CONTROL_DATA_DIR=str(data),MISSION_CONTROL_CACHE_DIR=str(root/'cache'))
-        process = subprocess.run([sys.executable,'-m','backend.batch',str(scripts),
+        process = subprocess.run([sys.executable,'-m','boats.heron.backend.batch',str(scripts),
                                   '--output-dir',str(root/'batches'),'--startup-timeout','15'],
                                  cwd=ROOT,env=env,capture_output=True,text=True,timeout=45)
         directory = next((root/'batches').iterdir())
         return process,directory,json.loads((directory/'results.json').read_text())
 
     def test_one_backend_runs_files_sequentially_and_records_each_separately(self):
-        path_run = '''from backend.sdk import Waypoint, Plan, Leg, ConstantThrottle
+        path_run = '''from boats.heron.backend.sdk import Waypoint, Plan, Leg, ConstantThrottle
 
 def run(mc):
     plan = Plan([Leg(Waypoint(25.7581,-80.37365),Waypoint(25.758154,-80.37365),ConstantThrottle(1))])
@@ -142,7 +232,7 @@ def run(mc):
             self.assertFalse((Path(tmp)/'data/logs').exists())
 
     def test_navigation_only_occurs_when_explicitly_requested_by_experiment(self):
-        source = """from backend.sdk import Waypoint
+        source = """from boats.heron.backend.sdk import Waypoint
 
 def run(mc):
     with mc.control(kind='thrusters',start=Waypoint(25.7583,-80.3738),heading_deg=90) as control:
@@ -169,7 +259,7 @@ def run(mc):
                                      [config['home'], config['end'], config['home']])
 
     def test_movement_goals_complete_in_batch_and_record_feedback_without_schema_errors(self):
-        source = """from backend.sdk import Waypoint
+        source = """from boats.heron.backend.sdk import Waypoint
 
 def run(mc):
     start = Waypoint(25.7583, -80.3738)
@@ -235,7 +325,7 @@ def run(mc):
                     mc._request('/command',{'action':'detach_viewer'})
                     self.assertFalse(mc.state()['viewer_attached'])
                     with mc.record('after-detach'):
-                        from backend.sdk import Waypoint
+                        from boats.heron.backend.sdk import Waypoint
                         with mc.control(start=Waypoint(25.7581,-80.37365)) as control:
                             control.hold(.1,throttle=.2,steering=0)
                 self.assertFalse(endpoint.exists())

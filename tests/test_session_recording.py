@@ -13,10 +13,10 @@ from unittest.mock import Mock, patch
 from mcap.reader import make_reader
 from pymavlink import mavutil
 import rerun as rr
-from backend.bridge.runtime import MissionBackend
-from backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.bridge.runtime import MissionBackend
+from boats.heron.backend.controller.vehicle_control import VehicleController
 from backend.mapping.tiles import RasterTiles
-from backend.rerun.viewer_stream import ViewerStream
+from boats.heron.visualization.viewer_stream import ViewerStream
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -67,7 +67,7 @@ class SessionRecordingTests(unittest.TestCase):
             finally:
                 backend.close()
             directory = logger.output_path.parent
-            self.assertEqual(directory.parent, Path(tmp)/"logs")
+            self.assertEqual(directory.parent, Path(tmp)/"logs"/"heron")
             self.assertEqual({path.suffix for path in directory.iterdir()}, {".mcap", ".rrd", ".jsonl"})
             self.assertFalse((Path(tmp)/"recordings").exists())
             self.assertFalse((Path(tmp)/"blueprints").exists())
@@ -88,7 +88,7 @@ class SessionRecordingTests(unittest.TestCase):
             diagnostics = Path(tmp)/"stderr"
             with diagnostics.open("w") as stderr:
                 env = dict(os.environ, MISSION_CONTROL_DATA_DIR=tmp, MISSION_CONTROL_LOG_DIR=str(Path(tmp)/"logs"), MISSION_CONTROL_CACHE_DIR=tmp)
-                process = subprocess.Popen([sys.executable, "-u", "-m", "backend.bridge", "--demo", "--rerun-url", url],
+                process = subprocess.Popen([sys.executable, "-u", "-m", "boats.heron.backend.bridge", "--demo", "--rerun-url", url],
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, text=True, env=env)
                 try:
                     with selectors.DefaultSelector() as selector:

@@ -1,14 +1,17 @@
 # Architecture
 
-Mission Control runs one Rust frontend process and one Python backend process.
+Each Mission Control instance runs one Rust frontend and one Python backend for one boat.
+Heron lives in `boats/heron/`; SeaRobotics Surveyor is reserved for a later integration.
+Multiple boats will use separate windows and backend ports. Boat controllers and APIs
+remain independent; the geographic renderer, basemap and HTTP utilities are shared.
 The frontend owns the native window and custom controls. The backend owns the
 vehicle connection, mission execution, gamepad reader, and manual-control loop.
 Rerun handles visualization and replay using data produced by the Python SDK.
 
 ```mermaid
 flowchart LR
-  UI["frontend/ui"] --> Client["frontend/bridge"]
-  Client -->|"HTTP commands/state"| Runtime["backend/controller/runtime.py"]
+  UI["boats/heron/frontend/ui"] --> Client["boats/heron/frontend/bridge"]
+  Client -->|"HTTP commands/state"| Runtime["boats/heron/backend/controller/runtime.py"]
   Runtime --> Actions["controller/vehicle_control.py"]
   HID["input/joystick.py"] --> Manual["input/manual_control.py"]
   HID -->|"direct live pipe; independent of recording"| UI
@@ -21,9 +24,9 @@ flowchart LR
   Recorder --> MCAP["logger/mcap_logger.py"]
   Recorder --> JSONL["logger/jsonl_logger.py"]
   Recorder --> RRD["logger/rrd_logger.py"]
-  Recorder -->|"record observer"| View["rerun/viewer_stream.py + live/replay adapters"]
+  Recorder -->|"record observer"| View["boats/heron/visualization: viewer_stream + live/replay"]
   View -->|gRPC| Viewer["frontend/viewer"]
-  QGC["QGroundControl forwarding"] --> Passive["python -m backend.logger"]
+  QGC["QGroundControl forwarding"] --> Passive["python -m boats.heron.backend.logger"]
   Passive --> Recorder
 ```
 
@@ -31,15 +34,15 @@ flowchart LR
 
 `backend/launch.py` starts the Rust frontend, passing the Python interpreter and
 checkout path through environment variables. `frontend/main.rs` creates the
-Rerun receiver. `frontend/bridge/worker.rs` starts `python -m backend.bridge`
+Rerun receiver. `boats/heron/frontend/bridge/worker.rs` starts `python -m boats.heron.backend.bridge`
 with that receiver's URL and keeps the child's stdin open.
 
 The Python bridge first prints one readiness JSON record containing the command
 server's ephemeral loopback port, a random bearer token, and basemap metadata.
-The Rust worker reads that record and uses `frontend/bridge/http.rs` for API
+The Rust worker reads that record and uses `boats/heron/frontend/bridge/http.rs` for API
 requests. After readiness, a separate nonblocking writer pushes small joystick
 snapshots on stdout at up to 120 Hz. Native display stores only the newest one.
-`frontend/bridge/protocol.rs` defines the in-process Rust messages
+`boats/heron/frontend/bridge/protocol.rs` defines the in-process Rust messages
 between the UI and the worker; HTTP payloads are JSON and are validated by
 `backend/bridge/validation.py`.
 
@@ -59,11 +62,11 @@ that controller runtime with the Rerun adapters and recording operations.
 
 The data connection is separate from the command API:
 
-- `backend/rerun/live.py` converts live snapshots into Rerun entities.
-- `backend/rerun/replay.py` converts MCAP files and selected reading layers.
-- `backend/rerun/blueprint.py` describes the default layout and view queries.
+- `boats/heron/visualization/live.py` converts live snapshots into Rerun entities.
+- `boats/heron/visualization/replay.py` converts MCAP files and selected reading layers.
+- `boats/heron/visualization/blueprint.py` describes the default layout and view queries.
 - `frontend/viewer.rs` creates the native Rerun viewer that renders those logs.
-- `frontend/ui/` draws the additional egui control panels beside that viewer.
+- `boats/heron/frontend/ui/` draws the additional egui control panels beside that viewer.
 
 The Python Rerun SDK adapters are visualization data producers. They contain no
 Rust/egui widgets. The Rust UI contains no MAVLink implementation.
@@ -75,7 +78,7 @@ reads WGS84 CRS, pixel scale, raster tiepoint, and valid-coverage metadata from
 the packaged TIFF/GeoJSON files. `tiles.py` reprojects source pixels using
 Web Mercator row latitudes and exposes authenticated `/tiles/fiu/{z}/{x}/{y}.png`.
 
-At backend readiness, `frontend/app.rs` configures the local provider in the
+At backend readiness, `boats/heron/frontend/app.rs` configures the local provider in the
 pinned `frontend/vendor/re_view_map/` adaptation. It retains Rerun's geographic
 visualizers and time-range behavior while replacing the fixed online tile
 sources. The provider has no external map fallback. Bounds and center originate
@@ -88,11 +91,11 @@ there is no second preview map. Replay recordings disable route editing.
 
 ## Safety and lifecycle ownership
 
-`frontend/app.rs` handles UI focus, frame heartbeats, confirmations, and window
+`boats/heron/frontend/app.rs` handles UI focus, frame heartbeats, confirmations, and window
 close events. The bridge worker observes a shared frame timestamp and expires
 stalled UI input. A separate stdout pipe reader replaces the latest joystick
-snapshot independently of HTTP requests and Rerun. `backend/controller/runtime.py` owns the backend input lease and command
-locks; `backend/input/manual_control.py` keeps MAVLink manual output at 20 Hz independently of
+snapshot independently of HTTP requests and Rerun. `boats/heron/backend/controller/runtime.py` owns the backend input lease and command
+locks; `boats/heron/backend/input/manual_control.py` keeps MAVLink manual output at 20 Hz independently of
 rendering.
 
 The Rerun logging observer calls `state(refresh_ui=False)` and cannot keep a
@@ -119,23 +122,23 @@ heartbeat mode/arming telemetry remains authoritative.
 
 | Change | Start here |
 | --- | --- |
-| Vehicle controls / arming widgets | `frontend/ui/vehicle.rs` |
+| Vehicle controls / arming widgets | `boats/heron/frontend/ui/vehicle.rs` |
 | Waypoint editor / lake controls | `frontend/ui/map_controls.rs` |
-| MCAP picker / filter widgets | `frontend/ui/recordings.rs` |
-| Panel placement / confirmations | `frontend/ui/layout.rs` |
-| Input enable / app lifecycle | `frontend/app.rs` |
+| MCAP picker / filter widgets | `boats/heron/frontend/ui/recordings.rs` |
+| Panel placement / confirmations | `boats/heron/frontend/ui/layout.rs` |
+| Input enable / app lifecycle | `boats/heron/frontend/app.rs` |
 | Rerun host settings | `frontend/viewer.rs` |
-| Default Rerun views | `backend/rerun/blueprint.py` |
-| Telemetry fields / recorded entities | `backend/rerun/live.py`, `replay.py` |
-| Vehicle commands / mission execution | `backend/controller/vehicle_control.py`, `mission_session.py` |
-| Input expiry / resource cleanup | `backend/controller/runtime.py` |
+| Default Rerun views | `boats/heron/visualization/blueprint.py` |
+| Telemetry fields / recorded entities | `boats/heron/visualization/live.py`, `replay.py` |
+| Vehicle commands / mission execution | `boats/heron/backend/controller/vehicle_control.py`, `mission_session.py` |
+| Input expiry / resource cleanup | `boats/heron/backend/controller/runtime.py` |
 | API routes / command validation | `backend/bridge/http_server.py`, `validation.py` |
-| Native HTTP client / child management | `frontend/bridge/http.rs`, `worker.rs` |
-| Map projection / imagery / lake geometry | `backend/mapping/` |
-| File writers / recorder CLI / source clocks | `backend/logger/` |
-| MAVLink connection / capture attachment / decoding | `backend/mavlink/` |
-| Joystick acquisition / manual-control stream | `backend/input/` |
-| MCAP replay decoding | `backend/recordings/` |
+| Native HTTP client / child management | `boats/heron/frontend/bridge/http.rs`, `worker.rs` |
+| Map projection / imagery / lake geometry | `backend/mapping/`, `boats/heron/backend/mapping/` |
+| File writers / recorder CLI / source clocks | `boats/heron/backend/logger/` |
+| MAVLink connection / capture attachment / decoding | `boats/heron/backend/mavlink/` |
+| Joystick acquisition / manual-control stream | `boats/heron/backend/input/` |
+| MCAP replay decoding | `boats/heron/backend/recordings/` |
 
 ## Verification
 
@@ -147,7 +150,7 @@ streaming, and parent-death cleanup without using a live vehicle.
 
 ## Generated files
 
-Output defaults to `logs/<session>/` beneath the Mission Control checkout.
+Output defaults to `logs/heron/<session>/` beneath the Mission Control checkout.
 Each live session stores matching `.mcap`, `.rrd`, and `.jsonl` files in that
 folder. The MCAP and JSONL share the same clock-aware record payloads. Incoming MAVLink
 records use onboard boot/Unix time when present; local input uses GCS time. Missing
@@ -158,7 +161,7 @@ Active files use `.part` suffixes. Shutdown stops producers, writes the MCAP
 indexes/footer and RRD footer, flushes/syncs files, then atomically publishes
 completed filenames. EOF and graceful termination signals use the same cleanup.
 Unfinished files retain their `.part` names after an abrupt termination.
-Replay and filtered exports each receive a separate session folder under `logs`.
+Replay and filtered exports each receive a separate session folder under `logs/heron/`.
 
 The root is resolved at runtime (`MISSION_CONTROL_DATA_DIR`, with
 `MISSION_CONTROL_LOG_DIR` or legacy `HERON_LOG_DIR` overriding the log root).
@@ -172,4 +175,8 @@ no longer needs separate `recordings` or `blueprints` folders.
 vehicle telemetry into three files without any controller or UI. Each writer can
 also be used independently. The recorder does not send vehicle commands. Close
 drains pending records, flushes writers, and finalizes every selected file.
-See [logger APIs, clock domains, and QGC setup](../backend/logger/README.md).
+See [logger APIs, clock domains, and QGC setup](../boats/heron/backend/logger/README.md).
+
+Boat ownership and data paths are documented in [the boat guide](../boats/README.md)
+and [the Heron guide](../boats/heron/README.md). Existing recordings and saved files
+are not moved. New boat identity metadata and cross-instance map overlays are deferred.

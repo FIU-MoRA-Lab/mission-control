@@ -6,11 +6,11 @@ import unittest
 import rerun as rr
 try:
     import polars as pl
-    from backend.analysis.rrd import load_rrd
+    from boats.heron.backend.analysis.rrd import load_rrd
 except ModuleNotFoundError:
     pl = None
-from backend.logger.records import input_record
-from backend.logger.rrd_logger import RrdLogger
+from boats.heron.backend.logger.records import input_record
+from boats.heron.backend.logger.rrd_logger import RrdLogger
 
 
 @unittest.skipIf(pl is None, "Install the analysis extra")

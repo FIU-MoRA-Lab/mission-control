@@ -2,9 +2,9 @@
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from backend.batch import live_blockers, wait_for_vehicle
-from backend.controller.vehicle_control import VehicleController
-from backend.mavlink.telemetry import VehicleTelemetry
+from boats.heron.backend.batch import live_blockers, wait_for_vehicle
+from boats.heron.backend.controller.vehicle_control import VehicleController
+from boats.heron.backend.mavlink.telemetry import VehicleTelemetry
 
 
 class LiveReadinessTests(unittest.TestCase):
@@ -20,7 +20,7 @@ class LiveReadinessTests(unittest.TestCase):
         from unittest.mock import Mock
         mc = Mock()
         mc.state.return_value = state
-        with patch('backend.batch.time.sleep'), patch('backend.batch.time.monotonic',side_effect=[0,0,2]),patch('builtins.print'):
+        with patch('boats.heron.backend.batch.time.sleep'), patch('boats.heron.backend.batch.time.monotonic',side_effect=[0,0,2]),patch('builtins.print'):
             with self.assertRaisesRegex(TimeoutError,'GPS fix unavailable'):
                 wait_for_vehicle(mc,1)
         mc.read_parameters.assert_not_called()
@@ -35,7 +35,7 @@ class LiveReadinessTests(unittest.TestCase):
         mc.state.side_effect = [optimistic,confirmed]
         def verify(): self.assertEqual(mc.state.call_count,2)
         mc.read_parameters.side_effect = verify
-        with patch('backend.batch.time.sleep'),patch('builtins.print'):
+        with patch('boats.heron.backend.batch.time.sleep'),patch('builtins.print'):
             wait_for_vehicle(mc,1,no_gps=True)
         mc.read_parameters.assert_not_called()
 
@@ -53,7 +53,7 @@ class LiveReadinessTests(unittest.TestCase):
         mc.read_parameters.assert_not_called()
 
     def test_companion_heartbeat_cannot_refresh_vehicle_link(self):
-        with patch('backend.mavlink.transport.SessionRecorder'):
+        with patch('boats.heron.backend.mavlink.transport.SessionRecorder'):
             c = VehicleController()
         c.connected = True
         c.autopilot_component = 1
